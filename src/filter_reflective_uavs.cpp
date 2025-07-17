@@ -16,6 +16,7 @@ void FilterReflectiveUavs::onInit() {
 	param_loader.loadParam("min_intensity", _min_intensity_);
 	param_loader.loadParam("max_intensity", _max_intensity_);
 	param_loader.loadParam("search_radius", _search_radius_);
+	param_loader.loadParam("max_distance_from_seed", _max_distance_from_seed_);	
 	param_loader.loadParam("ouster", _ouster_);
 	
 	if (!param_loader.loadedSuccessfully()) {
@@ -32,83 +33,91 @@ void FilterReflectiveUavs::onInit() {
 	shopts.queue_size         = 10;
 	shopts.transport_hints    = ros::TransportHints().tcpNoDelay();
 
-	if (_ouster_) {
+	if (_ouster_) { //for ouster and for simulation, since ouster is implemented for simulating
 		sh_pointcloud_ = mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>(shopts, "lidar3d_in", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPointCloudOuster, this);
-	} else {
+	} else { //for livox and for real world experiments - due to different data storage
 		sh_pointcloud_ = mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>(shopts, "lidar3d_in", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPointCloud, this);
 	}
 
 	pub_pointCloud_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_pcl", 10, true);
+	pub_agent_pcl_  = nh.advertise<sensor_msgs::PointCloud2>("agents_pcl", 10, true);
 
 	is_initialized_ = true;
 	ROS_INFO("[%s]: Initialization completed.", node_name.c_str());
 };
 
 void FilterReflectiveUavs::callbackPointCloudOuster(const sensor_msgs::PointCloud2::ConstPtr msg) {
-	//todo max diameter fo the uav - so it doesnt search further - also load, also publish maybe centroid of removed points for the rbl agent feed
+	//todo also publish maybe centroid of removed points for the rbl agent feed
 
 	if (!is_initialized_) {
     	return;
   	}
-	// pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZI>());
-	// pcl::fromROSMsg(*msg, *pcl_cloud);
-
 
 	pcl::PointCloud<ouster_ros::Point>::Ptr pcl_cloud = boost::make_shared<pcl::PointCloud<ouster_ros::Point>>();
   	pcl::fromROSMsg(*msg, *pcl_cloud);
 
-	// print all different intensities
-	// std::vector<bool> intensities(256, false);
-
-	// for (auto&& pt : *pcl_cloud) {
-	// 	if (intensities[pt.reflectivity] == false) {
-	// 	intensities[pt.reflectivity] = true;
-	// 	}
-	// }
-
-	// for (size_t j = 0; j < intensities.size(); ++j){
-	// 	if (intensities[j] == true) {
-	// 	std::cout << j << ", ";
-	// 	}
-	// }
-	// std::cout << std::endl;
-
-	// pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
 	pcl::search::KdTree<ouster_ros::Point>::Ptr kdtree = boost::make_shared<pcl::search::KdTree<ouster_ros::Point>>();
 	kdtree->setInputCloud(pcl_cloud);
 
+	std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
 	std::vector<int> seed_indices;
+	std::vector<float> min_sq_dist_from_seed(pcl_cloud->points.size(), std::numeric_limits<float>::max());
+	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl(new pcl::PointCloud<pcl::PointXYZ>);
+
 	for (int i = 0; i < pcl_cloud->points.size(); ++i) {
 		if (pcl_cloud->points[i].reflectivity >= _min_intensity_ && pcl_cloud->points[i].reflectivity <= _max_intensity_) {
 			seed_indices.push_back(i);
 		}
 	}
 
-	std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
-	for (int idx : seed_indices) {
-		is_uav_point[idx] = true;
-	}
+	struct QueueElement {
+		int idx;
+		float sq_dist_from_seed;
+	};
+	std::queue<QueueElement> q;
 
 	for (int idx : seed_indices) {
-		std::queue<int> q;
-		q.push(idx);
+        if (!is_uav_point[idx]) { 
+            is_uav_point[idx] = true;
+			pcl::PointXYZ pt_xyz(pcl_cloud->points[idx].x, pcl_cloud->points[idx].y, pcl_cloud->points[idx].z);
+			agent_pcl->push_back(pt_xyz);
+            min_sq_dist_from_seed[idx] = 0.0f; // Seed points are 0 distance from themselves
+            q.push({idx, 0.0f});
+        }
+    }
 
-		while (!q.empty()) {
-			int current_idx = q.front();
-			q.pop();
+	float max_sq_distance_from_seed = _max_distance_from_seed_ * _max_distance_from_seed_;
 
-			std::vector<int> neighbors;
-			std::vector<float> sqr_distances;
-			kdtree->radiusSearch(pcl_cloud->points[current_idx], _search_radius_, neighbors, sqr_distances);
+	while (!q.empty()) {
+        QueueElement current_element = q.front();
+        q.pop();
 
-			for (int n_idx : neighbors) {
-				if (!is_uav_point[n_idx]) {
-				is_uav_point[n_idx] = true;
-				q.push(n_idx);
-				}
-			}
-		}
-	}
+        int current_idx = current_element.idx;
+        float current_sq_dist_from_seed = current_element.sq_dist_from_seed;
+
+        std::vector<int> neighbors;
+        std::vector<float> sqr_distances_to_neighbor; // sqr_distances from current_idx to neighbor
+        kdtree->radiusSearch(pcl_cloud->points[current_idx], _search_radius_, neighbors, sqr_distances_to_neighbor);
+
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            int n_idx = neighbors[i];
+            float sq_dist_to_neighbor = sqr_distances_to_neighbor[i];
+
+            float new_sq_dist_from_seed = current_sq_dist_from_seed + sq_dist_to_neighbor;
+
+            if (new_sq_dist_from_seed <= max_sq_distance_from_seed && new_sq_dist_from_seed < min_sq_dist_from_seed[n_idx]) {
+
+                min_sq_dist_from_seed[n_idx] = new_sq_dist_from_seed;
+
+                if (!is_uav_point[n_idx]) {
+                    is_uav_point[n_idx] = true; 
+					pcl::PointXYZ pt_xyz(pcl_cloud->points[n_idx].x, pcl_cloud->points[n_idx].y, pcl_cloud->points[n_idx].z);
+					agent_pcl->push_back(pt_xyz);
+                    q.push({n_idx, new_sq_dist_from_seed});
+                }
+            }
+        }
+    }
 
 	pcl::PointCloud<ouster_ros::Point>::Ptr environment_cloud = boost::make_shared<pcl::PointCloud<ouster_ros::Point>>();
 	for (size_t i = 0; i < pcl_cloud->points.size(); ++i) {
@@ -123,71 +132,95 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const sensor_msgs::PointClou
 	pcl::toROSMsg(*environment_cloud, output_msg);
 	output_msg.header = msg->header; // timestamp,frame_id
 	pub_pointCloud_.publish(output_msg);
+
+
+	
+	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_centroids = cluster_agent_pcl_to_centroids(agent_pcl);
+
+	sensor_msgs::PointCloud2 output_centroid_msg;
+    pcl::toROSMsg(*agent_centroids, output_centroid_msg);
+
+	output_centroid_msg.header = msg->header;
+
+    pub_agent_pcl_.publish(output_centroid_msg);
+
+
+
+
 }
 
-
-void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg) {
-	//todo interval, search radius load, max diameter fo the uav - so it doesnt search further - also load, also publish maybe centroid of removed points for the rbl agent feed
+void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg) { //this one is for livox
+	// also publish maybe centroid of removed points for the rbl agent feed
 
 	if (!is_initialized_) {
     	return;
   	}
+
 	pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZI>());
 	pcl::fromROSMsg(*msg, *pcl_cloud);
-
-	// // print all different intensities
-	// std::vector<bool> intensities(256, false);
-
-	// for (auto&& pt : *pcl_cloud) {
-	// 	if (intensities[pt.intensity] == false) {
-	// 	intensities[pt.intensity] = true;
-	// 	}
-	// }
-
-	// for (size_t j = 0; j < intensities.size(); ++j){
-	// 	if (intensities[j] == true) {
-	// 	std::cout << j << ", ";
-	// 	}
-	// }
-	// std::cout << std::endl;
 
 	pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
 	kdtree.setInputCloud(pcl_cloud);
 
+	std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
 	std::vector<int> seed_indices;
+	std::vector<float> min_sq_dist_from_seed(pcl_cloud->points.size(), std::numeric_limits<float>::max());
+	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl(new pcl::PointCloud<pcl::PointXYZ>);
+
 	for (int i = 0; i < pcl_cloud->points.size(); ++i) {
-		if (pcl_cloud->points[i].intensity == 255) {
+		if (pcl_cloud->points[i].intensity >= _min_intensity_ && pcl_cloud->points[i].intensity <= _max_intensity_) {
 			seed_indices.push_back(i);
 		}
 	}
 
-	std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
+	struct QueueElement {
+		int idx;
+		float sq_dist_from_seed;
+	};
+	std::queue<QueueElement> q;
+
 	for (int idx : seed_indices) {
-		is_uav_point[idx] = true;
-	}
+        if (!is_uav_point[idx]) { 
+            is_uav_point[idx] = true;
+			pcl::PointXYZ pt_xyz(pcl_cloud->points[idx].x, pcl_cloud->points[idx].y, pcl_cloud->points[idx].z);
+			agent_pcl->push_back(pt_xyz);
+            min_sq_dist_from_seed[idx] = 0.0f; // Seed points are 0 distance from themselves
+            q.push({idx, 0.0f});
+        }
+    }
 
-	double radius = 0.2; //TODO tune, load
+	float max_sq_distance_from_seed = _max_distance_from_seed_ * _max_distance_from_seed_;
 
-	for (int idx : seed_indices) {
-		std::queue<int> q;
-		q.push(idx);
+	while (!q.empty()) {
+        QueueElement current_element = q.front();
+        q.pop();
 
-		while (!q.empty()) {
-			int current_idx = q.front();
-			q.pop();
+        int current_idx = current_element.idx;
+        float current_sq_dist_from_seed = current_element.sq_dist_from_seed;
 
-			std::vector<int> neighbors;
-			std::vector<float> sqr_distances;
-			kdtree.radiusSearch(pcl_cloud->points[current_idx], radius, neighbors, sqr_distances);
+        std::vector<int> neighbors;
+        std::vector<float> sqr_distances_to_neighbor; // sqr_distances from current_idx to neighbor
+        kdtree.radiusSearch(pcl_cloud->points[current_idx], _search_radius_, neighbors, sqr_distances_to_neighbor);
 
-			for (int n_idx : neighbors) {
-				if (!is_uav_point[n_idx]) {
-				is_uav_point[n_idx] = true;
-				q.push(n_idx);
-				}
-			}
-		}
-	}
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            int n_idx = neighbors[i];
+            float sq_dist_to_neighbor = sqr_distances_to_neighbor[i];
+
+            float new_sq_dist_from_seed = current_sq_dist_from_seed + sq_dist_to_neighbor;
+
+            if (new_sq_dist_from_seed <= max_sq_distance_from_seed && new_sq_dist_from_seed < min_sq_dist_from_seed[n_idx]) {
+
+                min_sq_dist_from_seed[n_idx] = new_sq_dist_from_seed;
+
+                if (!is_uav_point[n_idx]) {
+                    is_uav_point[n_idx] = true; 
+					pcl::PointXYZ pt_xyz(pcl_cloud->points[n_idx].x, pcl_cloud->points[n_idx].y, pcl_cloud->points[n_idx].z);
+					agent_pcl->push_back(pt_xyz);
+                    q.push({n_idx, new_sq_dist_from_seed});
+                }
+            }
+        }
+    }
 
 	pcl::PointCloud<pcl::PointXYZI>::Ptr environment_cloud(new pcl::PointCloud<pcl::PointXYZI>);
 
@@ -203,6 +236,70 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 	pcl::toROSMsg(*environment_cloud, output_msg);
 	output_msg.header = msg->header; // timestamp,frame_id
 	pub_pointCloud_.publish(output_msg);
+
+	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_centroids = cluster_agent_pcl_to_centroids(agent_pcl);
+
+	sensor_msgs::PointCloud2 output_centroid_msg;
+    pcl::toROSMsg(*agent_centroids, output_centroid_msg);
+
+	output_centroid_msg.header = msg->header;
+
+    pub_agent_pcl_.publish(output_centroid_msg);
+	
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_centroids(pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl) {
+	// TODO consider moving the centroid a little bit further from the current sensing UAV - Will see mainly the closer boundary points
+	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_centroids(new pcl::PointCloud<pcl::PointXYZ>);
+
+    if (agent_pcl->empty()) {
+        ROS_WARN_STREAM("Do not see any agents. Input agent_pcl is empty, no centroids to compute.");
+        return agent_centroids;
+    }
+
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr kdtree_for_clustering(new pcl::search::KdTree<pcl::PointXYZ>());
+    kdtree_for_clustering->setInputCloud(agent_pcl);
+
+    pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
+
+    ec.setClusterTolerance(_search_radius_);
+    ec.setMinClusterSize(1);
+    ec.setMaxClusterSize(50);
+
+    ec.setSearchMethod(kdtree_for_clustering);
+    ec.setInputCloud(agent_pcl);
+
+    std::vector<pcl::PointIndices> cluster_indices;
+
+    ec.extract(cluster_indices);
+
+    ROS_INFO_STREAM("Found " << cluster_indices.size() << " UAV clusters.");
+
+    for (const auto& cluster : cluster_indices) {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr current_cluster_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+        for (int index : cluster.indices) {
+            current_cluster_cloud->points.push_back(agent_pcl->points[index]);
+        }
+
+        Eigen::Vector4f cluster_centroid_eigen; 
+        pcl::compute3DCentroid(*current_cluster_cloud, cluster_centroid_eigen);
+
+        pcl::PointXYZ centroid_point;
+        centroid_point.x = cluster_centroid_eigen[0];
+        centroid_point.y = cluster_centroid_eigen[1];
+        centroid_point.z = cluster_centroid_eigen[2];
+
+        agent_centroids->points.push_back(centroid_point);
+
+        ROS_INFO_STREAM("Cluster centroid: (" << centroid_point.x << ", " << centroid_point.y << ", " << centroid_point.z << ")");
+    }
+
+    agent_centroids->width = agent_centroids->points.size();
+    agent_centroids->height = 1;
+    agent_centroids->is_dense = true;
+
+    return agent_centroids;
 }
 
 void FilterReflectiveUavs::timeoutGeneric(const std::string& topic, const ros::Time& last_msg) {

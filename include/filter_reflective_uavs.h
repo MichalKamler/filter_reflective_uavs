@@ -46,7 +46,6 @@
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/common/transforms.h>
-#include <pcl_conversions/pcl_conversions.h>
 #include <pcl/search/kdtree.h>
 #include <pcl/search/impl/kdtree.hpp>
 #include <pcl/kdtree/kdtree.h>
@@ -55,6 +54,10 @@
 #include <pcl/search/impl/organized.hpp>
 #include <pcl/search/search.h>
 #include <pcl/search/impl/search.hpp>
+
+#include <pcl/common/centroid.h> 
+#include <pcl/segmentation/extract_clusters.h> 
+
 
 // helper libraries
 #include <string>
@@ -74,13 +77,16 @@ public:
 	int 																										_min_intensity_;
 	int 																										_max_intensity_;
 	double																										_search_radius_;
+	double 																										_max_distance_from_seed_;
 	bool 																										_ouster_;
 	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_pointcloud_;
-	ros::Publisher                 																				pub_pointCloud_;	
+	ros::Publisher                 																				pub_pointCloud_;
+	ros::Publisher																								pub_agent_pcl_;
 
 
 	void callbackPointCloudOuster(const sensor_msgs::PointCloud2::ConstPtr msg);
 	void callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cluster_agent_pcl_to_centroids(pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl);
 	void timeoutGeneric(const std::string& topic, const ros::Time& last_msg);
 };
 
