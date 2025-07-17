@@ -1,0 +1,5 @@
+min_intensity: 200
+max_intensity: 255
+search_radius: 0.2 #tunable parameter for searching nearby points that are parts of uav, but without the tape - uavs shouldnt be closer to obstacle than this parameter - could filter obstacle 
+ouster: true #for simulation using ouster, false if using livox on real drone - different raw data 
+

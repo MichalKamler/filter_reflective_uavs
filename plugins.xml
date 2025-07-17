@@ -1,0 +1,5 @@
+<library path="lib/libFilterReflectiveUavs">
+  <class name="filter_reflective_uavs/FilterReflectiveUavs" type="filter_reflective_uavs::FilterReflectiveUavs" base_class_type="nodelet::Nodelet">
+    <description>Filter for filtering out uavs with reflective tape.</description>
+  </class>
+</library>
