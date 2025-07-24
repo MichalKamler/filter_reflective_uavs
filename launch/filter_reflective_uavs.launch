@@ -27,8 +27,9 @@
       <!-- <remap from="~ground_truth_in" to="/$(arg TRACKED_UAV)/ground_truth"/> -->
       <!-- <remap from="~lidar3d_in" to="os_cloud_nodelet/points"/> -->
       <!-- <remap from="~lidar3d_in" to="pcl_filter_detection/points_processed"/> -->
-      <!-- <remap from="~lidar3d_in" to="pcl_filter_ouster/points_processed"/> -->
-      <remap from="~lidar3d_in" to="reflective_marker_simulation/points_out"/>
+      <remap from="~lidar3d_in" to="pcl_filter_ouster/points_processed"/>
+      <!-- <remap from="~lidar3d_in" to="reflective_marker_simulation/points_out"/> -->
+      <remap from="~estimated_pos" to="reflective_marker_detection/estimates"/>
 
     </node>
 
