@@ -160,6 +160,22 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 	pcl::fromROSMsg(*msg, *pcl_cloud);
 
 	pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
+
+	//cloud not empty!!
+	if (pcl_cloud->points.size() == 0) {
+		sensor_msgs::PointCloud2 output_msg;
+		pcl::toROSMsg(*pcl_cloud, output_msg);
+		output_msg.header = msg->header; // timestamp,frame_id
+		pub_pointCloud_.publish(output_msg);
+
+		pcl::PointCloud<pcl::PointXYZ>::Ptr agent_centroids;
+		sensor_msgs::PointCloud2 output_centroid_msg;
+		pcl::toROSMsg(*agent_centroids, output_centroid_msg);
+		output_centroid_msg.header = msg->header;
+		pub_agent_pcl_.publish(output_centroid_msg);
+
+		return;
+	}
 	kdtree.setInputCloud(pcl_cloud);
 
 	std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
