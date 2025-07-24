@@ -20,7 +20,8 @@
 #include <mrs_lib/param_loader.h>
 #include <mrs_lib/subscribe_handler.h>
 #include <mrs_lib/publisher_handler.h>
-
+#include <mrs_msgs/PoseWithCovarianceArrayStamped.h>
+#include <mrs_msgs/PoseWithCovarianceIdentified.h>
 // PCL
 #include <ouster_ros/point.h>
 // #include <pcl/point_cloud.h>
@@ -64,6 +65,8 @@
 #include <vector>
 #include <cmath>
 #include <queue>
+#include <mutex>
+#include <shared_mutex>
 
 namespace filter_reflective_uavs {
 
@@ -78,15 +81,21 @@ public:
 	int 																										_max_intensity_;
 	double																										_search_radius_;
 	double 																										_max_distance_from_seed_;
+	int 																										_max_removed_points_;
 	bool 																										_ouster_;
+	std::vector<Eigen::Vector3d>																				uav_positions;
 	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_pointcloud_;
+	mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>															sh_uav_position_estimation_;
 	ros::Publisher                 																				pub_pointCloud_;
 	ros::Publisher																								pub_agent_pcl_;
+	// mutable std::mutex 																							uav_positions_mutex;
+	mutable std::shared_mutex uav_positions_mutex;
 
 
 	void callbackPointCloudOuster(const sensor_msgs::PointCloud2::ConstPtr msg);
 	void callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cluster_agent_pcl_to_centroids(pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl);
+	void callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg);
 	void timeoutGeneric(const std::string& topic, const ros::Time& last_msg);
 };
 

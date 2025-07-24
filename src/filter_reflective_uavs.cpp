@@ -17,6 +17,7 @@ void FilterReflectiveUavs::onInit() {
 	param_loader.loadParam("max_intensity", _max_intensity_);
 	param_loader.loadParam("search_radius", _search_radius_);
 	param_loader.loadParam("max_distance_from_seed", _max_distance_from_seed_);	
+	param_loader.loadParam("max_removed_points", _max_removed_points_);		
 	param_loader.loadParam("ouster", _ouster_);
 	
 	if (!param_loader.loadedSuccessfully()) {
@@ -38,6 +39,8 @@ void FilterReflectiveUavs::onInit() {
 	} else { //for livox and for real world experiments - due to different data storage
 		sh_pointcloud_ = mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>(shopts, "lidar3d_in", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPointCloud, this);
 	}
+
+	sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "lidar3d_in", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
 
 	pub_pointCloud_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_pcl", 10, true);
 	pub_agent_pcl_  = nh.advertise<sensor_msgs::PointCloud2>("agents_pcl", 10, true);
@@ -126,7 +129,7 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const sensor_msgs::PointClou
 		}
 	}
 
-	std::cout << "Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
+	std::cout << "[Ouster] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
 
 	sensor_msgs::PointCloud2 output_msg;
 	pcl::toROSMsg(*environment_cloud, output_msg);
@@ -151,7 +154,8 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const sensor_msgs::PointClou
 
 void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg) { //this one is for livox
 	// also publish maybe centroid of removed points for the rbl agent feed
-
+	std::shared_lock<std::shared_mutex> lock(uav_positions_mutex);
+	// std::lock_guard<std::mutex> lock(uav_positions_mutex);
 	if (!is_initialized_) {
     	return;
   	}
@@ -159,10 +163,30 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 	pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZI>());
 	pcl::fromROSMsg(*msg, *pcl_cloud);
 
+	std::vector<int> seed_indices;
 	pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
 
+	for (const auto& uav_pos : uav_positions) {
+		pcl::PointXYZI p;
+        p.x = uav_pos.x(); 
+		p.y = uav_pos.y();
+        p.z = uav_pos.z();
+        p.intensity = 255.0f; 
+
+        int current_index = pcl_cloud->points.size();
+
+        pcl_cloud->points.push_back(p);
+
+        pcl_cloud->width = pcl_cloud->points.size();
+        pcl_cloud->height = 1;
+
+        seed_indices.push_back(current_index);
+	}
+	lock.unlock();
+
+
 	//cloud not empty!!
-	if (pcl_cloud->points.size() == 0) {
+	if (pcl_cloud->points.size() ==	 0) {
 		sensor_msgs::PointCloud2 output_msg;
 		pcl::toROSMsg(*pcl_cloud, output_msg);
 		output_msg.header = msg->header; // timestamp,frame_id
@@ -179,64 +203,94 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 	kdtree.setInputCloud(pcl_cloud);
 
 	std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
-	std::vector<int> seed_indices;
 	std::vector<float> min_sq_dist_from_seed(pcl_cloud->points.size(), std::numeric_limits<float>::max());
 	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl(new pcl::PointCloud<pcl::PointXYZ>);
 
-	for (int i = 0; i < pcl_cloud->points.size(); ++i) {
-		if (pcl_cloud->points[i].intensity >= _min_intensity_ && pcl_cloud->points[i].intensity <= _max_intensity_) {
-			seed_indices.push_back(i);
-		}
-	}
+	// for (int i = 0; i < pcl_cloud->points.size(); ++i) {
+	// 	if (pcl_cloud->points[i].intensity >= _min_intensity_ && pcl_cloud->points[i].intensity <= _max_intensity_) {
+	// 		seed_indices.push_back(i);
+	// 	}
+	// }
 
 	struct QueueElement {
 		int idx;
 		float sq_dist_from_seed;
 	};
-	std::queue<QueueElement> q;
+	// std::queue<QueueElement> q;
 
-	for (int idx : seed_indices) {
-        if (!is_uav_point[idx]) { 
-            is_uav_point[idx] = true;
-			pcl::PointXYZ pt_xyz(pcl_cloud->points[idx].x, pcl_cloud->points[idx].y, pcl_cloud->points[idx].z);
-			agent_pcl->push_back(pt_xyz);
-            min_sq_dist_from_seed[idx] = 0.0f; // Seed points are 0 distance from themselves
-            q.push({idx, 0.0f});
-        }
-    }
+	// for (int idx : seed_indices) {
+    //     if (!is_uav_point[idx]) { 
+    //         is_uav_point[idx] = true;
+	// 		pcl::PointXYZ pt_xyz(pcl_cloud->points[idx].x, pcl_cloud->points[idx].y, pcl_cloud->points[idx].z);
+	// 		agent_pcl->push_back(pt_xyz);
+    //         min_sq_dist_from_seed[idx] = 0.0f; // Seed points are 0 distance from themselves
+    //         q.push({idx, 0.0f});
+    //     }
+    // }
 
 	float max_sq_distance_from_seed = _max_distance_from_seed_ * _max_distance_from_seed_;
 
-	while (!q.empty()) {
-        QueueElement current_element = q.front();
-        q.pop();
+	for (int idx_seed: seed_indices) {
+		std::queue<QueueElement> q;
+		q.push({idx_seed, 0.0f});
+		pcl::PointXYZI seed = pcl_cloud->points[idx_seed];
+		is_uav_point[idx_seed] = true;
 
-        int current_idx = current_element.idx;
-        float current_sq_dist_from_seed = current_element.sq_dist_from_seed;
+		while (!q.empty()) {
+			QueueElement current_element = q.front();
+			q.pop();
+			int current_idx = current_element.idx;
+			std::vector<int> neighbors;
+			std::vector<float> sqr_distances_to_neighbor; // sqr_distances from current_idx to neighbor
+			kdtree.radiusSearch(pcl_cloud->points[current_idx], _search_radius_, neighbors, sqr_distances_to_neighbor);
 
-        std::vector<int> neighbors;
-        std::vector<float> sqr_distances_to_neighbor; // sqr_distances from current_idx to neighbor
-        kdtree.radiusSearch(pcl_cloud->points[current_idx], _search_radius_, neighbors, sqr_distances_to_neighbor);
-
-        for (size_t i = 0; i < neighbors.size(); ++i) {
-            int n_idx = neighbors[i];
-            float sq_dist_to_neighbor = sqr_distances_to_neighbor[i];
-
-            float new_sq_dist_from_seed = current_sq_dist_from_seed + sq_dist_to_neighbor;
-
-            if (new_sq_dist_from_seed <= max_sq_distance_from_seed && new_sq_dist_from_seed < min_sq_dist_from_seed[n_idx]) {
-
-                min_sq_dist_from_seed[n_idx] = new_sq_dist_from_seed;
-
-                if (!is_uav_point[n_idx]) {
-                    is_uav_point[n_idx] = true; 
-					pcl::PointXYZ pt_xyz(pcl_cloud->points[n_idx].x, pcl_cloud->points[n_idx].y, pcl_cloud->points[n_idx].z);
+			for (size_t i = 0; i < neighbors.size(); ++i) {	
+				int neighbor_idx = neighbors[i];
+				pcl::PointXYZI neighbor_point = pcl_cloud->points[neighbor_idx];
+				float sq_dist_to_seed = neighbor_point.x * seed.x + neighbor_point.y * seed.y + neighbor_point.z * seed.z;
+				
+				if (sq_dist_to_seed > max_sq_distance_from_seed) {
+					continue;
+				} else {					
+					is_uav_point[neighbor_idx] = true; 
+					pcl::PointXYZ pt_xyz(pcl_cloud->points[neighbor_idx].x, pcl_cloud->points[neighbor_idx].y, pcl_cloud->points[neighbor_idx].z);
 					agent_pcl->push_back(pt_xyz);
-                    q.push({n_idx, new_sq_dist_from_seed});
-                }
-            }
-        }
-    }
+					q.push({neighbor_idx, sq_dist_to_seed});
+				}
+			}
+		}
+	}
+
+	// while (!q.empty()) {
+    //     QueueElement current_element = q.front();
+    //     q.pop();
+
+    //     int current_idx = current_element.idx;
+    //     float current_sq_dist_from_seed = current_element.sq_dist_from_seed;
+
+    //     std::vector<int> neighbors;
+    //     std::vector<float> sqr_distances_to_neighbor; // sqr_distances from current_idx to neighbor
+    //     kdtree.radiusSearch(pcl_cloud->points[current_idx], _search_radius_, neighbors, sqr_distances_to_neighbor);
+
+    //     for (size_t i = 0; i < neighbors.size(); ++i) {
+    //         int n_idx = neighbors[i];
+    //         float sq_dist_to_neighbor = sqr_distances_to_neighbor[i];
+
+    //         float new_sq_dist_from_seed = current_sq_dist_from_seed + sq_dist_to_neighbor;
+
+    //         if (new_sq_dist_from_seed <= max_sq_distance_from_seed && new_sq_dist_from_seed < min_sq_dist_from_seed[n_idx]) {
+
+    //             min_sq_dist_from_seed[n_idx] = new_sq_dist_from_seed;
+
+    //             if (!is_uav_point[n_idx]) {
+    //                 is_uav_point[n_idx] = true; 
+	// 				pcl::PointXYZ pt_xyz(pcl_cloud->points[n_idx].x, pcl_cloud->points[n_idx].y, pcl_cloud->points[n_idx].z);
+	// 				agent_pcl->push_back(pt_xyz);
+    //                 q.push({n_idx, new_sq_dist_from_seed});
+    //             }
+    //         }
+    //     }
+    // }
 
 	pcl::PointCloud<pcl::PointXYZI>::Ptr environment_cloud(new pcl::PointCloud<pcl::PointXYZI>);
 
@@ -246,7 +300,7 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 		}
 	}
 
-	std::cout << "Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
+	std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
 
 	sensor_msgs::PointCloud2 output_msg;
 	pcl::toROSMsg(*environment_cloud, output_msg);
@@ -316,6 +370,22 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
     agent_centroids->is_dense = true;
 
     return agent_centroids;
+}
+
+void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg) {
+	std::unique_lock<std::shared_mutex> lock(uav_positions_mutex);
+	// std::lock_guard<std::mutex> lock(uav_positions_mutex);
+
+	uav_positions.clear();
+
+	for (const auto& pose : msg->poses) {
+
+		double x = pose.pose.position.x;
+		double y = pose.pose.position.y;
+		double z = pose.pose.position.z;
+
+        uav_positions.push_back(Eigen::Vector3d(x, y, z));
+    }
 }
 
 void FilterReflectiveUavs::timeoutGeneric(const std::string& topic, const ros::Time& last_msg) {
