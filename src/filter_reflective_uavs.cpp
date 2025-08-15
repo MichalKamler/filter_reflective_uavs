@@ -125,9 +125,9 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	} else {
 		for (const auto& uav_pos : uav_positions) {
 			pcl::PointXYZI p;
-			p.x = uav_pos.x(); 
-			p.y = uav_pos.y();
-			p.z = uav_pos.z();
+      p.x = uav_pos.second.x(); 
+			p.y = uav_pos.second.y();
+			p.z = uav_pos.second.z();
 			p.intensity = 255.0f; 
 
 			int current_index = pcl_cloud->points.size();
@@ -296,16 +296,18 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
 void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg) {
 	std::unique_lock<std::shared_mutex> lock(uav_positions_mutex);
 
-	uav_positions.clear();
-
+	/* uav_positions.clear(); */
+  ros::Time now = ros::Time::now();
+  ros::Time pose_time = msg->header.stamp;
 	for (const auto& pose : msg->poses) {
+		    double x = pose.pose.position.x;
+		    double y = pose.pose.position.y;
+		    double z = pose.pose.position.z;
 
-		double x = pose.pose.position.x;
-		double y = pose.pose.position.y;
-		double z = pose.pose.position.z;
-
-        uav_positions.push_back(Eigen::Vector3d(x, y, z));
+        uav_positions.emplace_back(pose_time ,Eigen::Vector3d(x, y, z));
     }
+  uav_positions.erase(std::remove_if(uav_positions.begin(), uav_positions.end(),[&](const auto& entry) {
+          return (now - entry.first).toSec() > 0.5;}),uav_positions.end());
 }
 
 void FilterReflectiveUavs::timeoutGeneric(const std::string& topic, const ros::Time& last_msg) {
