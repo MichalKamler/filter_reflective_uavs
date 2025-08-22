@@ -139,10 +139,10 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	}
 	lock.unlock();
 
-	std::cout << "added points to the pcl cloud" << std::endl;
+	// std::cout << "added points to the pcl cloud" << std::endl;
 
 	if (pcl_cloud->points.size() ==	 0) {
-		std::cout << "pcl cloud is 0" << std::endl;
+		// std::cout << "pcl cloud is 0" << std::endl;
 
 		sensor_msgs::PointCloud2 output_msg;
 		pcl::toROSMsg(*pcl_cloud, output_msg);
@@ -170,14 +170,14 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	float max_sq_distance_from_seed = _max_distance_from_seed_ * _max_distance_from_seed_;
 
 	for (int idx_seed: seed_indices) {
-		std::cout << "loopin through idx seeds" << std::endl;
+		// std::cout << "loopin through idx seeds" << std::endl;
 		std::queue<QueueElement> q;
 		q.push({idx_seed, 0.0f});
 		pcl::PointXYZI seed = pcl_cloud->points[idx_seed];
 		is_uav_point[idx_seed] = true;
 
 		while (!q.empty()) {
-			std::cout << "Queue size is: " << q.size() << std::endl;
+			// std::cout << "Queue size is: " << q.size() << std::endl;
 			QueueElement current_element = q.front();
 			q.pop();
 			int current_idx = current_element.idx;
@@ -205,7 +205,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 		}
 	}
 
-	std::cout << "seeds are done" << std::endl;
+	// std::cout << "seeds are done" << std::endl;
 
 	pcl::PointCloud<pcl::PointXYZI>::Ptr environment_cloud(new pcl::PointCloud<pcl::PointXYZI>);
 
@@ -215,7 +215,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 		}
 	}
 
-	std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
+	// std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
 
 	sensor_msgs::PointCloud2 output_msg;
 	pcl::toROSMsg(*environment_cloud, output_msg);
@@ -244,7 +244,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
 	pcl::PointCloud<pcl::PointXYZ>::Ptr agent_centroids(new pcl::PointCloud<pcl::PointXYZ>);
 
     if (agent_pcl->empty()) {
-        ROS_WARN_STREAM("Do not see any agents. Input agent_pcl is empty, no centroids to compute.");
+        // ROS_WARN_STREAM("Do not see any agents. Input agent_pcl is empty, no centroids to compute.");
         return agent_centroids;
     }
 
@@ -264,7 +264,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
 
     ec.extract(cluster_indices);
 
-    ROS_INFO_STREAM("Found " << cluster_indices.size() << " UAV clusters.");
+    // ROS_INFO_STREAM("Found " << cluster_indices.size() << " UAV clusters.");
 
     for (const auto& cluster : cluster_indices) {
         pcl::PointCloud<pcl::PointXYZ>::Ptr current_cluster_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -283,7 +283,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
 
         agent_centroids->points.push_back(centroid_point);
 
-        ROS_INFO_STREAM("Cluster centroid: (" << centroid_point.x << ", " << centroid_point.y << ", " << centroid_point.z << ")");
+        // ROS_INFO_STREAM("Cluster centroid: (" << centroid_point.x << ", " << centroid_point.y << ", " << centroid_point.z << ")");
     }
 
     agent_centroids->width = agent_centroids->points.size();
