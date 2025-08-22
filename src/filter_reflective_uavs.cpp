@@ -123,7 +123,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 			seed_indices.push_back(current_index);
 		}
 	} else {
-    /* std::cout << "Saved this many uav positions: " << uav_positions.size() << std::endl; */
+    std::cout << "Saved this many uav positions: " << uav_positions.size() << std::endl;
 		for (const auto& uav_pos : uav_positions) {
 			pcl::PointXYZI p;
       p.x = uav_pos.second.x(); 
@@ -218,7 +218,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 		}
 	}
 
-	/* std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl; */
+	std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
 
 	sensor_msgs::PointCloud2 output_msg;
 	pcl::toROSMsg(*environment_cloud, output_msg);
