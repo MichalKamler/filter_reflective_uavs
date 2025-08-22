@@ -41,7 +41,8 @@ void FilterReflectiveUavs::onInit() {
 		sh_pointcloud_ = mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>(shopts, "lidar3d_in", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPointCloud, this);
 	}
 
-	sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
+    sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
+	sh_uav_position_ = mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>(shopts, "estimate_position_pcl", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackEstimatedPCL, this);
 
 	pub_pointCloud_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_pcl", 10, true);
 	pub_agent_pcl_  = nh.advertise<sensor_msgs::PointCloud2>("agents_pcl", 10, true);
@@ -238,8 +239,15 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 	std::string frame_id = msg->header.frame_id;
     ros::Time timestamp = msg->header.stamp;
 
-	filterOutUavs(pcl_cloud, frame_id, timestamp);
-
+	// filterOutUavs(pcl_cloud, frame_id, timestamp);
+    auto ret = removeUavs(pcl_cloud, frame_id, timestamp);
+    if (ret) {
+    pub_pointCloud_.publish(*ret);
+    }
+    else {
+    pub_pointCloud_.publish(msg);
+    }
+    
 }
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_centroids(pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl) {
@@ -297,9 +305,9 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
 }
 
 void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg) {
-	std::unique_lock<std::shared_mutex> lock(uav_positions_mutex);
+	std::scoped_lock lck(uav_positions_mutex);
 
-	/* uav_positions.clear(); */
+	uav_positions.clear();
   ros::Time now = ros::Time::now();
   ros::Time pose_time = msg->header.stamp;
 	for (const auto& pose : msg->poses) {
@@ -309,12 +317,89 @@ void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArray
 
         uav_positions.emplace_back(pose_time ,Eigen::Vector3d(x, y, z));
     }
-  uav_positions.erase(std::remove_if(uav_positions.begin(), uav_positions.end(),[&](const auto& entry) {
-          return (now - entry.first).toSec() > _time_keep_;}),uav_positions.end());
+  // uav_positions.erase(std::remove_if(uav_positions.begin(), uav_positions.end(),[&](const auto& entry) {
+  //         return (now - entry.first).toSec() > _time_keep_;}),uav_positions.end());
 }
 
 void FilterReflectiveUavs::timeoutGeneric(const std::string& topic, const ros::Time& last_msg) {
   ROS_WARN_THROTTLE(1.0, "[FilterReflectiveUavs]: not receiving '%s' for %.3f s", topic.c_str(), (ros::Time::now() - last_msg).toSec());
+}
+
+std::shared_ptr<sensor_msgs::PointCloud2>
+FilterReflectiveUavs::removeUavs(const pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud,
+           const std::string &frame_id, const ros::Time &timestamp) {
+
+  if (pcl_cloud->points.size() == 0) {
+    ROS_WARN_STREAM("[FilterReflectiveUavs]: Receiving empty point clouds");
+    return std::shared_ptr<sensor_msgs::PointCloud2>();
+  }
+    std::vector<int> uav_indices;
+    pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
+
+    {
+        std::scoped_lock lck(mtx_uav_cloud_);
+
+  if (!uav_cloud_) {
+    ROS_WARN_STREAM("[FilterReflectiveUavs]: Nothing to remove");
+    return std::shared_ptr<sensor_msgs::PointCloud2>();
+  }
+
+  for (auto &uav_pt : uav_cloud_->points) {
+    uav_indices.push_back(pcl_cloud->points.size());
+    pcl_cloud->push_back(uav_pt);
+  }
+    }
+
+  ROS_INFO_STREAM("[FilterReflectiveUavs]: Added "
+                  << uav_indices.size() << " points to the PCL for search");
+
+  kdtree.setInputCloud(pcl_cloud);
+
+  std::vector<bool> is_occupied(pcl_cloud->points.size(), false);
+
+  for (const int &idx : uav_indices) {
+    is_occupied[idx] = true;
+    std::vector<int> occupied_indices;
+    std::vector<float> sqr_dist_to_occupied;
+    kdtree.radiusSearch(pcl_cloud->points[idx], _search_radius_,
+                        occupied_indices, sqr_dist_to_occupied);
+
+    for (const int &idx_occupied : occupied_indices) {
+      is_occupied[idx_occupied] = true;
+      ROS_DEBUG_STREAM("[FilterReflectiveUavs]: Setting idx:" << idx_occupied
+                                                             << " as occupied");
+    }
+  }
+
+  ROS_INFO_STREAM("[FilterReflectiveUavs]: Input PCL size: "
+                  << pcl_cloud->points.size());
+  pcl::PointCloud<pcl::PointXYZI> cloud_modified;
+  for (size_t i = 0; i < pcl_cloud->points.size(); ++i) {
+    if (!is_occupied[i]) {
+      cloud_modified.push_back(pcl_cloud->points[i]);
+    }
+  }
+  ROS_INFO_STREAM("[FilterReflectiveUavs]: Filtered PCL size: "
+                  << cloud_modified.points.size());
+
+  sensor_msgs::PointCloud2 msg;
+  pcl::toROSMsg(cloud_modified, msg);
+  msg.header.frame_id = frame_id;
+  msg.header.stamp = timestamp;
+
+  return std::make_shared<sensor_msgs::PointCloud2>(msg);
+}
+
+void FilterReflectiveUavs::callbackEstimatedPCL(const sensor_msgs::PointCloud2::ConstPtr msg) {
+	if (!is_initialized_) {
+    	return;
+  	}
+
+    std::scoped_lock lck(mtx_uav_cloud_);
+	pcl::PointCloud<pcl::PointXYZI> tmp_cloud;
+	pcl::fromROSMsg(*msg, tmp_cloud);
+
+    uav_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>(tmp_cloud);
 }
 
 }  // namespace filter_reflective_uavs

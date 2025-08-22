@@ -89,12 +89,15 @@ public:
   std::vector<std::pair<ros::Time, Eigen::Vector3d>>																				uav_positions;
 	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_pointcloud_;
 	mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>															sh_uav_position_estimation_;
+	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_uav_position_;
 	ros::Publisher                 																				pub_pointCloud_;
 	ros::Publisher																								pub_agent_pcl_;
 	// mutable std::mutex 																							uav_positions_mutex;
 	mrs_lib::Transformer transformer_;
 	mutable std::shared_mutex uav_positions_mutex;
 
+    std::mutex mtx_uav_cloud_;
+    std::shared_ptr<pcl::PointCloud<pcl::PointXYZI>> uav_cloud_;
 
 	void callbackPointCloudOuster(const sensor_msgs::PointCloud2::ConstPtr msg);
 	void callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg);
@@ -102,6 +105,8 @@ public:
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cluster_agent_pcl_to_centroids(pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl);
 	void callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg);
 	void timeoutGeneric(const std::string& topic, const ros::Time& last_msg);
+    std::shared_ptr<sensor_msgs::PointCloud2> removeUavs(const pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud, const std::string &frame_id, const ros::Time &timestamp);
+    void callbackEstimatedPCL(const sensor_msgs::PointCloud2::ConstPtr msg);
 };
 
 } //namespace filter_reflective_uavs
