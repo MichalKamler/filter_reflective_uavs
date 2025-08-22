@@ -20,7 +20,7 @@ void FilterReflectiveUavs::onInit() {
 	param_loader.loadParam("max_removed_points", _max_removed_points_);		
 	param_loader.loadParam("ouster", _ouster_);
 	param_loader.loadParam("load_gt_uav_positions", _load_gt_uav_positions_);
-  param_loader.loadParam("time_keep", _time_keep_);	
+  	param_loader.loadParam("time_keep", _time_keep_);	
 	if (!param_loader.loadedSuccessfully()) {
     	ROS_ERROR("[%s]: parameter loading failure", node_name.c_str());
     	ros::shutdown();
@@ -45,6 +45,7 @@ void FilterReflectiveUavs::onInit() {
 
 	pub_pointCloud_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_pcl", 10, true);
 	pub_pointCloud_removed_ = nh.advertise<sensor_msgs::PointCloud2>("removed_pcl", 10, true);
+	pub_seeds_ = nh.advertise<sensor_msgs::PointCloud2>("seeds", 10, true);
 	pub_agent_pcl_  = nh.advertise<sensor_msgs::PointCloud2>("agents_pcl", 10, true);
 
 	transformer_ = mrs_lib::Transformer("FilterReflectiveUavs");
@@ -127,7 +128,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
     std::cout << "Saved this many uav positions: " << uav_positions.size() << std::endl;
 		for (const auto& uav_pos : uav_positions) {
 			pcl::PointXYZI p;
-      p.x = uav_pos.second.x(); 
+      		p.x = uav_pos.second.x(); 
 			p.y = uav_pos.second.y();
 			p.z = uav_pos.second.z();
 			p.intensity = 255.0f; 
@@ -240,6 +241,25 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	output_msg_removed_points.header.frame_id = frame_id; 
 	output_msg_removed_points.header.stamp = timestamp; 
 	pub_pointCloud_removed_.publish(output_msg_removed_points);
+
+
+	pcl::PointCloud<pcl::PointXYZI>::Ptr seed_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+
+	for (const auto& uav_pos : uav_positions) {
+		pcl::PointXYZI p;
+		p.x = uav_pos.second.x(); 
+		p.y = uav_pos.second.y();
+		p.z = uav_pos.second.z();
+		p.intensity = 255.0f; 
+
+		seed_cloud->points.push_back(p);
+	}
+
+	sensor_msgs::PointCloud2 output_msg_seeds;
+	pcl::toROSMsg(*seed_cloud, output_msg_seeds);
+	output_msg_seeds.header.frame_id = frame_id; 
+	output_msg_seeds.header.stamp = timestamp; 
+	pub_seeds_.publish(output_msg_seeds);
 }
 
 void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg) { //this one is for livox

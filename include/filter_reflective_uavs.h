@@ -91,6 +91,7 @@ public:
 	mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>															sh_uav_position_estimation_;
 	ros::Publisher                 																				pub_pointCloud_;
 	ros::Publisher																								pub_pointCloud_removed_;
+	ros::Publisher																								pub_seeds_;
 	ros::Publisher																								pub_agent_pcl_;
 	// mutable std::mutex 																							uav_positions_mutex;
 	mrs_lib::Transformer transformer_;
