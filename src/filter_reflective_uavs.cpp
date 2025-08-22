@@ -41,7 +41,7 @@ void FilterReflectiveUavs::onInit() {
 		sh_pointcloud_ = mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>(shopts, "lidar3d_in", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPointCloud, this);
 	}
 
-	sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
+	/* sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this); */
 
 	sub_pointCloud2_pos_  = nh.subscribe("estimated_pos", 1, &FilterReflectiveUavs::pointCloud2PosCallback, this);
 
