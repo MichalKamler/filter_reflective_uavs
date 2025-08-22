@@ -43,6 +43,8 @@ void FilterReflectiveUavs::onInit() {
 
 	sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
 
+	sub_pointCloud2_pos_  = nh.subscribe("estimated_pos", 1, &FilterReflectiveUavs::pointCloud2PosCallback, this);
+
 	pub_pointCloud_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_pcl", 10, true);
 	pub_pointCloud_removed_ = nh.advertise<sensor_msgs::PointCloud2>("removed_pcl", 10, true);
 	pub_seeds_ = nh.advertise<sensor_msgs::PointCloud2>("seeds", 10, true);
@@ -329,6 +331,27 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr FilterReflectiveUavs::cluster_agent_pcl_to_c
     agent_centroids->is_dense = true;
 
     return agent_centroids;
+}
+
+void FilterReflectiveUavs::pointCloud2PosCallback(const sensor_msgs::PointCloud2& pcl_cloud2) {
+	std::unique_lock<std::shared_mutex> lock(uav_positions_mutex);
+
+	/* uav_positions.clear(); */
+	ros::Time now = ros::Time::now();
+	ros::Time pose_time = pcl_cloud2.header.stamp;
+	pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
+
+    pcl::fromROSMsg(pcl_cloud2, pcl_cloud);
+
+    for (const auto& point : pcl_cloud.points) {
+        double x = point.x;
+        double y = point.y;
+        double z = point.z;
+		uav_positions.emplace_back(pose_time, Eigen::Vector3d(x, y, z));
+	}
+
+  uav_positions.erase(std::remove_if(uav_positions.begin(), uav_positions.end(),[&](const auto& entry) {
+          return (now - entry.first).toSec() > _time_keep_;}),uav_positions.end());
 }
 
 void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg) {

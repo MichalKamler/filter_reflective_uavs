@@ -93,6 +93,7 @@ public:
 	ros::Publisher																								pub_pointCloud_removed_;
 	ros::Publisher																								pub_seeds_;
 	ros::Publisher																								pub_agent_pcl_;
+	ros::Subscriber																								sub_pointCloud2_pos_;
 	// mutable std::mutex 																							uav_positions_mutex;
 	mrs_lib::Transformer transformer_;
 	mutable std::shared_mutex uav_positions_mutex;
@@ -104,6 +105,7 @@ public:
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cluster_agent_pcl_to_centroids(pcl::PointCloud<pcl::PointXYZ>::Ptr agent_pcl);
 	void callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg);
 	void timeoutGeneric(const std::string& topic, const ros::Time& last_msg);
+	void pointCloud2PosCallback(const sensor_msgs::PointCloud2& pcl_cloud2);
 };
 
 } //namespace filter_reflective_uavs

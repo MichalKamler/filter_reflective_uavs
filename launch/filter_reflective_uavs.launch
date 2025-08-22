@@ -31,7 +31,9 @@
       <remap from="~lidar3d_in" to="pcl_filter/livox_points_processed"/>
       <!-- <remap from="~lidar3d_in" to="pcl_filter_ouster/points_processed"/> -->
       <!-- <remap from="~lidar3d_in" to="reflective_marker_simulation/points_out"/> -->
-      <remap from="~estimated_pos" to="reflective_marker_detection/estimates"/>
+      <!-- <remap from="~estimated_pos" to="reflective_marker_detection/estimates"/> -->
+      <remap from="~estimated_pos" to="reflective_marker_detection/reflective_centroids_out"/>
+      
 
     </node>
 
