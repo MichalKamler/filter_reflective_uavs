@@ -44,6 +44,7 @@ void FilterReflectiveUavs::onInit() {
 	sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
 
 	pub_pointCloud_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_pcl", 10, true);
+	pub_pointCloud_removed_ = nh.advertise<sensor_msgs::PointCloud2>("removed_pcl", 10, true);
 	pub_agent_pcl_  = nh.advertise<sensor_msgs::PointCloud2>("agents_pcl", 10, true);
 
 	transformer_ = mrs_lib::Transformer("FilterReflectiveUavs");
@@ -225,6 +226,20 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	output_msg.header.frame_id = frame_id; 
 	output_msg.header.stamp = timestamp; 
 	pub_pointCloud_.publish(output_msg);
+
+	pcl::PointCloud<pcl::PointXYZI>::Ptr uav_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+
+	for (size_t i = 0; i < pcl_cloud->points.size(); ++i) {
+		if (is_uav_point[i]) {
+			uav_cloud->points.push_back(pcl_cloud->points[i]);
+		}
+	}
+
+	sensor_msgs::PointCloud2 output_msg_removed_points;
+	pcl::toROSMsg(*uav_cloud, output_msg_removed_points);
+	output_msg_removed_points.header.frame_id = frame_id; 
+	output_msg_removed_points.header.stamp = timestamp; 
+	pub_pointCloud_removed_.publish(output_msg_removed_points);
 }
 
 void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg) { //this one is for livox
