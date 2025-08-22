@@ -85,7 +85,8 @@ public:
 	int 																										_max_removed_points_;
 	bool 																										_ouster_;
 	bool																										_load_gt_uav_positions_;
-	std::vector<std::pair<ros::Time, Eigen::Vector3d>>																				uav_positions;
+  double                                                  _time_keep_;
+  std::vector<std::pair<ros::Time, Eigen::Vector3d>>																				uav_positions;
 	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_pointcloud_;
 	mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>															sh_uav_position_estimation_;
 	ros::Publisher                 																				pub_pointCloud_;

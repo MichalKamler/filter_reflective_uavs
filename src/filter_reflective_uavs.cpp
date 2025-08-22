@@ -20,7 +20,7 @@ void FilterReflectiveUavs::onInit() {
 	param_loader.loadParam("max_removed_points", _max_removed_points_);		
 	param_loader.loadParam("ouster", _ouster_);
 	param_loader.loadParam("load_gt_uav_positions", _load_gt_uav_positions_);
-	
+  param_loader.loadParam("time_keep", _time_keep_);	
 	if (!param_loader.loadedSuccessfully()) {
     	ROS_ERROR("[%s]: parameter loading failure", node_name.c_str());
     	ros::shutdown();
@@ -123,6 +123,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 			seed_indices.push_back(current_index);
 		}
 	} else {
+    /* std::cout << "Saved this many uav positions: " << uav_positions.size() << std::endl; */
 		for (const auto& uav_pos : uav_positions) {
 			pcl::PointXYZI p;
       p.x = uav_pos.second.x(); 
@@ -139,10 +140,10 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	}
 	lock.unlock();
 
-	std::cout << "added points to the pcl cloud" << std::endl;
+	/* std::cout << "added points to the pcl cloud" << std::endl; */
 
 	if (pcl_cloud->points.size() ==	 0) {
-		std::cout << "pcl cloud is 0" << std::endl;
+		/* std::cout << "pcl cloud is 0" << std::endl; */
 
 		sensor_msgs::PointCloud2 output_msg;
 		pcl::toROSMsg(*pcl_cloud, output_msg);
@@ -170,14 +171,14 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	float max_sq_distance_from_seed = _max_distance_from_seed_ * _max_distance_from_seed_;
 
 	for (int idx_seed: seed_indices) {
-		std::cout << "loopin through idx seeds" << std::endl;
+		/* std::cout << "loopin through idx seeds" << std::endl; */
 		std::queue<QueueElement> q;
 		q.push({idx_seed, 0.0f});
 		pcl::PointXYZI seed = pcl_cloud->points[idx_seed];
 		is_uav_point[idx_seed] = true;
 
 		while (!q.empty()) {
-			std::cout << "Queue size is: " << q.size() << std::endl;
+			/* std::cout << "Queue size is: " << q.size() << std::endl; */
 			QueueElement current_element = q.front();
 			q.pop();
 			int current_idx = current_element.idx;
@@ -194,8 +195,10 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 				float sq_dist_to_seed = dx*dx + dy*dy + dz*dz;
 				
 				if (sq_dist_to_seed > max_sq_distance_from_seed || is_uav_point[neighbor_idx]) {
-					continue;
-				} else {					
+          /* std::cout << "sq_dist_to_seed: " << sq_dist_to_seed << ", max_sq_distance_from_seed: " << max_sq_distance_from_seed << ", is_uav_point: " << is_uav_point[neighbor_idx] << std::endl; */
+          continue;
+				} else {	
+          /* std::cout << "pushing to queue point" << std::endl; */
 					is_uav_point[neighbor_idx] = true; 
 					pcl::PointXYZ pt_xyz(pcl_cloud->points[neighbor_idx].x, pcl_cloud->points[neighbor_idx].y, pcl_cloud->points[neighbor_idx].z);
 					// agent_pcl->push_back(pt_xyz);
@@ -205,7 +208,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 		}
 	}
 
-	std::cout << "seeds are done" << std::endl;
+	/* std::cout << "seeds are done" << std::endl; */
 
 	pcl::PointCloud<pcl::PointXYZI>::Ptr environment_cloud(new pcl::PointCloud<pcl::PointXYZI>);
 
@@ -215,7 +218,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 		}
 	}
 
-	std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
+	/* std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl; */
 
 	sensor_msgs::PointCloud2 output_msg;
 	pcl::toROSMsg(*environment_cloud, output_msg);
@@ -307,7 +310,7 @@ void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArray
         uav_positions.emplace_back(pose_time ,Eigen::Vector3d(x, y, z));
     }
   uav_positions.erase(std::remove_if(uav_positions.begin(), uav_positions.end(),[&](const auto& entry) {
-          return (now - entry.first).toSec() > 0.5;}),uav_positions.end());
+          return (now - entry.first).toSec() > _time_keep_;}),uav_positions.end());
 }
 
 void FilterReflectiveUavs::timeoutGeneric(const std::string& topic, const ros::Time& last_msg) {
