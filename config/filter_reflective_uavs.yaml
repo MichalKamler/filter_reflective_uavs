@@ -1,10 +1,26 @@
-min_intensity: 200
-max_intensity: 255
+min_intensity: 200.0
+max_intensity: 255.0
 search_radius: 1.0 #tunable parameter for searching nearby points that are parts of uav, but without the tape - uavs shouldnt be closer to obstacle than this parameter - could filter obstacle 
 max_distance_from_seed: 1.0 # maximum diameter of the uav - not all points on the uav are reflecitve
 max_removed_points: 200 #[-] for one uav
-ouster: false #for simulation using ouster, false if using livox on real drone - different raw data 
+ouster: true #for simulation using ouster, false if using livox on real drone - different raw data 
 
 time_keep: 5.0
 load_gt_uav_positions: false 
 
+reflective_clusters:
+  # tolerance: 0.2 # [m]
+  tolerance: 0.4 # [m]
+  min_points: 1 # [-]
+  max_points: 999999 # [-]
+
+voxel_grid:
+  use: True # [True / False]
+  size_x: 0.04 # [m]
+  size_y: 0.04 # [m]
+  size_z: 0.04 # [m]
+
+multi_uav_tracker:
+  dt: 0.2 
+  max_no_update: 5.0 # seconds before deleting a track. UAV is not beiing detected - flew away
+  gate_treshold: 2.0 #distance treshold for gating
