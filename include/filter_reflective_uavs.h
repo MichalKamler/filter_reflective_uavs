@@ -62,6 +62,14 @@
 #include <pcl/common/centroid.h> 
 #include <pcl/segmentation/extract_clusters.h> 
 
+#include <filter_reflective_uavs/PoseVelocityArray.h>
+#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/Vector3.h>
+#include <tf/transform_listener.h>
+#include <geometry_msgs/PointStamped.h>
+
+
+
 
 // helper libraries
 #include <string>
@@ -87,6 +95,7 @@ public:
 	bool 																										is_initialized_ = false;
 
 	std::string              																					_uav_name_;
+	std::string 																								_global_frame_;
 	float 																										_min_intensity_;
 	float 																										_max_intensity_;
 
@@ -108,6 +117,7 @@ public:
 	bool 																										_ouster_;
 	bool																										_load_gt_uav_positions_;
   	double                                                  													_time_keep_;
+	Eigen::Vector3d																								_agent_pos_;
 	std::vector<std::pair<ros::Time, Eigen::Vector3d>>															centroid_positions_;
   	std::vector<std::pair<ros::Time, Eigen::Vector3d>>															uav_positions;
 	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_pointcloud_;
@@ -118,7 +128,11 @@ public:
 	ros::Publisher																								pub_pointCloud_removed_;
 	ros::Publisher																								pub_seeds_;
 	ros::Publisher																								pub_agent_pcl_;
+	ros::Publisher 																								pub_pose_vel_array_;
+	ros::Publisher																								pub_velocity_markers_;
 	ros::Subscriber																								sub_pointCloud2_pos_;
+	ros::Subscriber																								sub_odom_;
+	tf::TransformListener 																						tf_listener_;
 	// mutable std::mutex 																							uav_positions_mutex;
 	mrs_lib::Transformer transformer_;
 	mutable std::shared_mutex uav_positions_mutex;
@@ -134,10 +148,11 @@ public:
     void predictTrack(Track& track);
     void updateTrack(Track& track, const Eigen::Vector3d& meas);
     void deleteStaleTracks(const ros::Time& current_time);
+	void publishVelAsArrow(const std::string& frame_id, const ros::Time& timestamp, std::vector<Track>& tracks);
 	void publishEstimates(const std::string& frame_id, const ros::Time& timestamp, std::vector<Track>& tracks);
 
 	//Clustering to centroids
-	std::vector<std::pair<ros::Time, Eigen::Vector3d>> clusterToCentroids(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, ros::Time timestamp);
+	std::vector<std::pair<ros::Time, Eigen::Vector3d>> clusterToCentroids(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, ros::Time timestamp, const std::string& frame_id);
 	void calculateCentroid2(const pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, const std::vector<pcl::PointIndices>& cluster_indices, std::vector<pcl::PointXYZ>& result);
 	std::vector<pcl::PointIndices> doEuclideanClustering(const pcl::search::KdTree<pcl::PointXYZI>::Ptr tree_orig, const pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, float clustering_tolerance, int min_points, int max_points, const pcl::IndicesConstPtr indices_within_radius = nullptr);
 
@@ -150,6 +165,7 @@ public:
 	void callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg);
 	void timeoutGeneric(const std::string& topic, const ros::Time& last_msg);
 	void pointCloud2PosCallback(const sensor_msgs::PointCloud2& pcl_cloud2);
+	void odomCallback(const nav_msgs::Odometry::ConstPtr& msg);
 };
 
 } //namespace filter_reflective_uavs

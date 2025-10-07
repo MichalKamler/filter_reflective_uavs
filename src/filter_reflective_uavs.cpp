@@ -13,6 +13,7 @@ void FilterReflectiveUavs::onInit() {
 	ROS_INFO("[%s]: loading parameters using ParamLoader", node_name.c_str());
 	mrs_lib::ParamLoader param_loader(nh, "RBLController");
 	param_loader.loadParam("uav_name", _uav_name_);
+	param_loader.loadParam("global_frame", _global_frame_);
 	param_loader.loadParam("min_intensity", _min_intensity_);
 	param_loader.loadParam("max_intensity", _max_intensity_);
 	param_loader.loadParam("reflective_clusters/tolerance", _reflective_clustering_tolerance_);
@@ -60,6 +61,7 @@ void FilterReflectiveUavs::onInit() {
 	// sh_uav_position_estimation_ = mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>(shopts, "estimated_pos", ros::Duration(1.0), &FilterReflectiveUavs::timeoutGeneric, this, &FilterReflectiveUavs::callbackPoses, this);
 
 	sub_pointCloud2_pos_  = nh.subscribe("estimated_pos", 1, &FilterReflectiveUavs::pointCloud2PosCallback, this);
+	sub_odom_  = nh.subscribe("/" + _uav_name_ + "/estimation_manager/odom_main", 10, &FilterReflectiveUavs::odomCallback, this);
 
 	publisher_pointcloud_reflective_centroids_ = nh.advertise<sensor_msgs::PointCloud2>("reflective_centroids_out", 10);
 	publisher_estimates_ = nh.advertise<mrs_msgs::PoseWithCovarianceArrayStamped>("estimates", 10);
@@ -67,6 +69,10 @@ void FilterReflectiveUavs::onInit() {
 	pub_pointCloud_removed_ = nh.advertise<sensor_msgs::PointCloud2>("removed_pcl", 10, true);
 	pub_seeds_ = nh.advertise<sensor_msgs::PointCloud2>("seeds", 10, true);
 	pub_agent_pcl_  = nh.advertise<sensor_msgs::PointCloud2>("agents_pcl", 10, true);
+	pub_velocity_markers_ = nh.advertise<visualization_msgs::MarkerArray>("velocity_viz", 10, true);
+
+	pub_pose_vel_array_ = nh.advertise<filter_reflective_uavs::PoseVelocityArray>("pose_velocity_array", 10, true);
+
 
 	transformer_ = mrs_lib::Transformer("FilterReflectiveUavs");
   	transformer_.setLookupTimeout(ros::Duration(0.1));
@@ -134,9 +140,49 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const sensor_msgs::PointClou
 		xyzi_cloud->height = 1;
 	}
 
-	centroid_positions_ = clusterToCentroids(xyzi_cloud, timestamp);
-	update(centroid_positions_);
-	publishEstimates(frame_id, timestamp, tracks_);
+	centroid_positions_ = clusterToCentroids(xyzi_cloud, timestamp, frame_id);
+
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_reflective_centroids = boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+	std::vector<std::pair<ros::Time, Eigen::Vector3d>> centroid_positions_global; 
+
+	for (const auto& centroid_pair : centroid_positions_) {
+		const ros::Time& centroid_time = centroid_pair.first; // Should be 'timestamp'
+		const Eigen::Vector3d& centroid_local = centroid_pair.second;
+
+		auto transformed_point_opt = transformer_.transformAsPoint(
+			frame_id,             // from_frame (Lidar frame)
+			centroid_local,       // what (the centroid point)
+			_global_frame_,       // to_frame (World origin)
+			centroid_time         // time_stamp
+		);
+
+		if (transformed_point_opt.has_value()) {
+			const Eigen::Vector3d& centroid_global = transformed_point_opt.value();
+
+			cloud_reflective_centroids->push_back(
+				pcl::PointXYZ(centroid_global.x(), centroid_global.y(), centroid_global.z())
+			);
+			
+			centroid_positions_global.emplace_back(centroid_time, centroid_global);
+			
+			std::cout << "[Filter]: Detected Centroid transformed (Global Frame): ["
+					<< centroid_global.x() << ", "
+					<< centroid_global.y() << ", "
+					<< centroid_global.z() << "]" << std::endl;
+
+		} else {
+			ROS_WARN_THROTTLE(1.0, "[Filter]: Failed to transform a centroid to global frame.");
+		}
+	}
+
+	cloud_reflective_centroids->header.frame_id = _global_frame_;
+	cloud_reflective_centroids->header.stamp = pcl_conversions::toPCL(timestamp);
+	publisher_pointcloud_reflective_centroids_.publish(cloud_reflective_centroids);
+
+	update(centroid_positions_global);
+	publishEstimates(_global_frame_, timestamp, tracks_);
+	publishVelAsArrow(_global_frame_, timestamp, tracks_);
+	
 	filterOutUavs(xyzi_cloud, frame_id, timestamp, tracks_);
 }
 
@@ -151,9 +197,49 @@ void FilterReflectiveUavs::callbackPointCloud(const sensor_msgs::PointCloud2::Co
 	std::string frame_id = msg->header.frame_id;
     ros::Time timestamp = msg->header.stamp;
 	
-	centroid_positions_ = clusterToCentroids(pcl_cloud, timestamp);
-	update(centroid_positions_);
+	centroid_positions_ = clusterToCentroids(pcl_cloud, timestamp, frame_id);
+
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_reflective_centroids = boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+	std::vector<std::pair<ros::Time, Eigen::Vector3d>> centroid_positions_global; 
+
+	for (const auto& centroid_pair : centroid_positions_) {
+		const ros::Time& centroid_time = centroid_pair.first; // Should be 'timestamp'
+		const Eigen::Vector3d& centroid_local = centroid_pair.second;
+
+		auto transformed_point_opt = transformer_.transformAsPoint(
+			frame_id,             // from_frame (Lidar frame)
+			centroid_local,       // what (the centroid point)
+			_global_frame_,       // to_frame (World origin)
+			centroid_time         // time_stamp
+		);
+
+		if (transformed_point_opt.has_value()) {
+			const Eigen::Vector3d& centroid_global = transformed_point_opt.value();
+
+			cloud_reflective_centroids->push_back(
+				pcl::PointXYZ(centroid_global.x(), centroid_global.y(), centroid_global.z())
+			);
+			
+			centroid_positions_global.emplace_back(centroid_time, centroid_global);
+			
+			std::cout << "[Filter]: Detected Centroid transformed (Global Frame): ["
+					<< centroid_global.x() << ", "
+					<< centroid_global.y() << ", "
+					<< centroid_global.z() << "]" << std::endl;
+
+		} else {
+			ROS_WARN_THROTTLE(1.0, "[Filter]: Failed to transform a centroid to global frame.");
+		}
+	}
+
+	cloud_reflective_centroids->header.frame_id = _global_frame_;
+	cloud_reflective_centroids->header.stamp = pcl_conversions::toPCL(timestamp);
+	publisher_pointcloud_reflective_centroids_.publish(cloud_reflective_centroids);
+
+	update(centroid_positions_global);
+
 	publishEstimates(frame_id, timestamp, tracks_);
+	publishVelAsArrow(_global_frame_, timestamp, tracks_);
 	filterOutUavs(pcl_cloud, frame_id, timestamp, tracks_);
 
 }
@@ -275,37 +361,116 @@ void FilterReflectiveUavs::deleteStaleTracks(const ros::Time& current_time) {
 	tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),[&](const Track& t) {return (current_time - t.last_update).toSec() > _max_no_update_;}),tracks_.end());
 }
 
+void FilterReflectiveUavs::publishVelAsArrow(const std::string& frame_id, const ros::Time& timestamp, std::vector<Track>& tracks) {
+    visualization_msgs::Marker velocity_markers;
+    velocity_markers.header.frame_id = frame_id;
+    velocity_markers.header.stamp = timestamp;
+    velocity_markers.ns = "velocity_viz"; 
+    velocity_markers.action = visualization_msgs::Marker::ADD;
+    velocity_markers.type = visualization_msgs::Marker::ARROW;
+
+    velocity_markers.color.a = 1.0; // Alpha (opacity)
+    velocity_markers.color.r = 1.0; // Red 
+    velocity_markers.color.g = 0.0;
+    velocity_markers.color.b = 0.0;
+    velocity_markers.scale.x = 0.05; // Shaft diameter (e.g., 5 cm)
+    velocity_markers.scale.y = 0.1;  // Head diameter (e.g., 10 cm)
+    std::vector<visualization_msgs::Marker> markers_to_publish;
+
+    int marker_id = 0; 
+
+    for (auto& track : tracks) {
+        Eigen::Vector3d pos = track.x.segment<3>(0); // indices 0..2
+        Eigen::Vector3d vel = track.x.segment<3>(3); // indices 3..5
+        
+        geometry_msgs::Pose p;
+        p.position.x = pos.x();
+        p.position.y = pos.y();
+        p.position.z = pos.z();
+        p.orientation.w = 1.0;  // identity quaternion
+
+        geometry_msgs::Vector3 v;
+        v.x = vel.x();
+        v.y = vel.y();
+        v.z = vel.z();
+
+        visualization_msgs::Marker arrow_marker = velocity_markers; 
+        arrow_marker.id = track.id; 
+        
+        geometry_msgs::Point start_point;
+        start_point.x = pos.x();
+        start_point.y = pos.y();
+        start_point.z = pos.z();
+        
+        const double velocity_scale_factor = 3.0; 
+        
+        geometry_msgs::Point end_point;
+        end_point.x = pos.x() + vel.x() * velocity_scale_factor;
+        end_point.y = pos.y() + vel.y() * velocity_scale_factor;
+        end_point.z = pos.z() + vel.z() * velocity_scale_factor;
+        
+        arrow_marker.points.push_back(start_point);
+        arrow_marker.points.push_back(end_point);
+        
+        markers_to_publish.push_back(arrow_marker);
+    }
+    
+    visualization_msgs::MarkerArray marker_array_msg;
+    marker_array_msg.markers = markers_to_publish;
+    pub_velocity_markers_.publish(marker_array_msg);
+}
+
 void FilterReflectiveUavs::publishEstimates(const std::string& frame_id, const ros::Time& timestamp, std::vector<Track>& tracks) {
-	ros::Time time_now = ros::Time::now();
+	// ros::Time time_now = ros::Time::now();
     mrs_msgs::PoseWithCovarianceArrayStamped msg_estimates;
     msg_estimates.header.frame_id = frame_id;
     msg_estimates.header.stamp    = timestamp;
 
-    for (auto& track : tracks) {
-		mrs_msgs::PoseWithCovarianceIdentified msg_est;
-		msg_est.id            = track.id;
+	filter_reflective_uavs::PoseVelocityArray msg;
+	msg.header.stamp = timestamp;
+	msg.header.frame_id = frame_id;
 
-		// KF state: [px, py, pz, vx, vy, vz, ax, ay, az]^T
+    for (auto& track : tracks) {
+		msg.ids.push_back(track.id);
 		Eigen::Vector3d pos = track.x.segment<3>(0); // indices 0..2
     	Eigen::Vector3d vel = track.x.segment<3>(3); // indices 3..5
+		
+		geometry_msgs::Pose p;
+		p.position.x = pos.x();
+		p.position.y = pos.y();
+		p.position.z = pos.z();
+		p.orientation.w = 1.0;  // identity quaternion
+
+		geometry_msgs::Vector3 v;
+		v.x = vel.x();
+		v.y = vel.y();
+		v.z = vel.z();
+
+		msg.poses.push_back(p);
+		msg.velocities.push_back(v);
+
+		mrs_msgs::PoseWithCovarianceIdentified msg_est;
+		msg_est.id            = track.id;
+		// KF state: [px, py, pz, vx, vy, vz, ax, ay, az]^T
 		Eigen::Matrix3d pos_cov = track.P.block<3,3>(0,0);
 
 		msg_est.pose = pose_to_msg(pos, vel);
 		covariance_to_msg(pos_cov, msg_est.covariance);
 		msg_estimates.poses.push_back(msg_est);
     }
+	pub_pose_vel_array_.publish(msg);
     publisher_estimates_.publish(msg_estimates);
 }
 
-std::vector<std::pair<ros::Time, Eigen::Vector3d>> FilterReflectiveUavs::clusterToCentroids(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, ros::Time timestamp) {
+std::vector<std::pair<ros::Time, Eigen::Vector3d>> FilterReflectiveUavs::clusterToCentroids(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, ros::Time timestamp, const std::string& frame_id) {
 	std::vector<std::pair<ros::Time, Eigen::Vector3d>> centroid_positions;
-	int cnt = 0;
-	for (auto&& pt : cloud->points) {
-		if (pt.intensity>=_min_intensity_) {
-			cnt += 1;
-		}
-	}
-	std::cout << "[CentroidsClustering]: cloud has this many points actually: " << cnt << std::endl;
+	// int cnt = 0;
+	// for (auto&& pt : cloud->points) {
+	// 	if (pt.intensity>=_min_intensity_) {
+	// 		cnt += 1;
+	// 	}
+	// }
+	// std::cout << "[CentroidsClustering]: cloud has this many points actually: " << cnt << std::endl;
 	if (cloud->size() == 0) {
 		ROS_WARN_THROTTLE(1.0, "[CentroidsClustering]: Input pointcloud is empty!");
 		return centroid_positions;
@@ -321,7 +486,7 @@ std::vector<std::pair<ros::Time, Eigen::Vector3d>> FilterReflectiveUavs::cluster
 	reflectivity_filt.setKeepOrganized(false);
 	reflectivity_filt.setInputCloud(cloud);
 	reflectivity_filt.filter(*cloud_reflective);
-	ROS_INFO_THROTTLE(1.0, "[CentroidsClustering]: Reflective points in cloud found: %d, (min threshold: %f)", (int)cloud_reflective->size(), _min_intensity_);
+	// ROS_INFO_THROTTLE(1.0, "[CentroidsClustering]: Reflective points in cloud found: %d, (min threshold: %f)", (int)cloud_reflective->size(), _min_intensity_);
 	if (cloud_reflective->size() == 0) {
 		ROS_WARN_THROTTLE(1.0, "[CentroidsClustering]: No reflective points in cloud (min threshold: %f)", _min_intensity_);
 		return centroid_positions;
@@ -340,21 +505,22 @@ std::vector<std::pair<ros::Time, Eigen::Vector3d>> FilterReflectiveUavs::cluster
 
 	const std::vector<pcl::PointIndices> cluster_indices = doEuclideanClustering(tree_reflective, cloud_reflective, _reflective_clustering_tolerance_, _reflective_clustering_min_points_, _reflective_clustering_max_points_);
 
-	ROS_INFO_THROTTLE(1.0, "[CentroidsClustering]: Found %d reflective clusters.", (int)cluster_indices.size());
+	// ROS_INFO_THROTTLE(1.0, "[CentroidsClustering]: Found %d reflective clusters.", (int)cluster_indices.size());
 
 	std::vector<pcl::PointXYZ> centroids_reflective;
 	calculateCentroid2(cloud_reflective, cluster_indices, centroids_reflective);
 
-	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_reflective_centroids = boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+	// pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_reflective_centroids = boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
 	for (auto&& pt : centroids_reflective) {
-		cloud_reflective_centroids->push_back(pt);
+		// cloud_reflective_centroids->push_back(pt);
 
 		centroid_positions.emplace_back(timestamp, Eigen::Vector3d(pt.x, pt.y, pt.z));
 	}
-	cloud_reflective_centroids->header = cloud->header;
-	std::cout << "[CentroidsClustering]: Publishing number of centroids: " << cloud_reflective_centroids->size() << std::endl;
+	// cloud_reflective_centroids->header.frame_id = frame_id;
+	// cloud_reflective_centroids->header.stamp = timestamp.toNSec();
+	// std::cout << "[CentroidsClustering]: Publishing number of centroids: " << cloud_reflective_centroids->size() << std::endl;
 
-	publisher_pointcloud_reflective_centroids_.publish(cloud_reflective_centroids);
+	// publisher_pointcloud_reflective_centroids_.publish(cloud_reflective_centroids);
 	return centroid_positions;
 }
 
@@ -375,6 +541,7 @@ void FilterReflectiveUavs::calculateCentroid2(const pcl::PointCloud<pcl::PointXY
     result.push_back(center_pt);
   }
 }
+
 std::vector<pcl::PointIndices> FilterReflectiveUavs::doEuclideanClustering(const pcl::search::KdTree<pcl::PointXYZI>::Ptr tree_orig, const pcl::PointCloud<pcl::PointXYZI>::Ptr cloud,
                                                                                 float clustering_tolerance, int min_points, int max_points,
                                                                                 const pcl::IndicesConstPtr indices_within_radius) {
@@ -398,7 +565,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	std::vector<int> seed_indices;
 	pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
 
-    // std::cout << "Saved this many uav positions: " << uav_positions.size() << std::endl;
+    std::cout << "Injecting this many points to pcl: " << tracks.size() << std::endl;
 	for (const auto& track : tracks) {
 		pcl::PointXYZI p;
 		p.x = track.x[0]; 
@@ -568,6 +735,10 @@ void FilterReflectiveUavs::pointCloud2PosCallback(const sensor_msgs::PointCloud2
 
   uav_positions.erase(std::remove_if(uav_positions.begin(), uav_positions.end(),[&](const auto& entry) {
           return (now - entry.first).toSec() > _time_keep_;}),uav_positions.end());
+}
+
+void FilterReflectiveUavs::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
+	_agent_pos_ = Eigen::Vector3d(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
 }
 
 void FilterReflectiveUavs::callbackPoses(const mrs_msgs::PoseWithCovarianceArrayStamped::ConstPtr msg) {

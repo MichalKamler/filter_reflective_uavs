@@ -19,11 +19,25 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_conversions
   pcl_ros
   roscpp
+  std_msgs
+  geometry_msgs
+  message_generation
   tf2
   tf2_ros
 )
 
 find_package(PCL REQUIRED)
+
+add_message_files(
+  FILES
+  PoseVelocityArray.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  geometry_msgs
+)
 
 catkin_package(
 #  INCLUDE_DIRS include
