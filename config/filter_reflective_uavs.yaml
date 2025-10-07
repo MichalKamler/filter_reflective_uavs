@@ -5,8 +5,10 @@ max_distance_from_seed: 1.0 # maximum diameter of the uav - not all points on th
 max_removed_points: 200 #[-] for one uav
 ouster: true #for simulation using ouster, false if using livox on real drone - different raw data 
 
-time_keep: 5.0
-load_gt_uav_positions: false 
+time_keep: 0.2
+load_gt_uav_positions: false
+
+keep_cloud_dt: 0.01
 
 reflective_clusters:
   # tolerance: 0.2 # [m]

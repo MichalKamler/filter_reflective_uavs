@@ -25,7 +25,8 @@
 
       <param name="uav_name" value="$(arg UAV_NAME)"/>
 
-      <param name="uav_name" value="$(arg UAV_NAME)" /><param name="global_frame" value="$(arg global_frame)" />
+      <!-- <param name="uav_name" value="$(arg UAV_NAME)" /> -->
+      <param name="global_frame" value="$(arg global_frame)" />
 
       <!-- <remap from="~ground_truth_in" to="/$(arg TRACKED_UAV)/ground_truth"/> -->
       <!-- <remap from="~lidar3d_in" to="os_cloud_nodelet/points"/> -->

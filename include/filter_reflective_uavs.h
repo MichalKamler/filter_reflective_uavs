@@ -7,6 +7,8 @@
 
 // I/O
 #include <stdio.h>
+#include <chrono>
+#include <iostream>
 
 // matrix math
 #include <Eigen/Dense>
@@ -100,9 +102,11 @@ public:
 	float 																										_max_intensity_;
 
 	std::vector<Track> 																							tracks_;
+	double																										_keep_cloud_dt_;
 	double 																										_dt_;
 	double 																										_max_no_update_;
 	double 																										_gate_treshold_;
+	double 																										_last_update_;
 
 	float 																										_reflective_clustering_tolerance_;
 	int         																								_reflective_clustering_min_points_;
@@ -119,9 +123,10 @@ public:
   	double                                                  													_time_keep_;
 	Eigen::Vector3d																								_agent_pos_;
 	std::vector<std::pair<ros::Time, Eigen::Vector3d>>															centroid_positions_;
+	std::vector<std::pair<ros::Time, Eigen::Vector3d>>															collected_centroid_positions_;
   	std::vector<std::pair<ros::Time, Eigen::Vector3d>>															uav_positions;
 	mrs_lib::SubscribeHandler<sensor_msgs::PointCloud2>															sh_pointcloud_;
-	mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>															sh_uav_position_estimation_;
+	mrs_lib::SubscribeHandler<mrs_msgs::PoseWithCovarianceArrayStamped>											sh_uav_position_estimation_;
 	ros::Publisher 																								publisher_pointcloud_reflective_centroids_;
 	ros::Publisher 																								publisher_estimates_;
 	ros::Publisher                 																				pub_pointCloud_;
@@ -140,6 +145,9 @@ public:
 
 	void callbackPointCloudOuster(const sensor_msgs::PointCloud2::ConstPtr msg);
 	void callbackPointCloud(const sensor_msgs::PointCloud2::ConstPtr msg);
+
+	std::vector<std::pair<ros::Time, Eigen::Vector3d>> filterLatestDetections(const std::vector<std::pair<ros::Time, Eigen::Vector3d>>& collected_centroid_positions, double search_radius);
+	std::vector<std::pair<ros::Time, Eigen::Vector3d>> transfromAndPublishCentroids(std::vector<std::pair<ros::Time, Eigen::Vector3d>> centroid_positions, std::string frame_id, ros::Time timestamp);
 
 	//Multiuav tracking
 	void update(const std::vector<std::pair<ros::Time, Eigen::Vector3d>>& measurements);
