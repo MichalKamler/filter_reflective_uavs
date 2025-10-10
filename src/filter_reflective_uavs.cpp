@@ -128,7 +128,7 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const sensor_msgs::PointClou
 			ROS_WARN_THROTTLE(5.0, "[FilterReflectiveUavs]: Failed to get TF for %s", uav_frame.c_str());
 			continue;
 		} else {
-			ROS_WARN_THROTTLE(5.0, "[FilterReflectiveUavs]: Good warining - able to get this tf :) %s", uav_frame.c_str());
+			// ROS_WARN_THROTTLE(5.0, "[FilterReflectiveUavs]: Good warining - able to get this tf :) %s", uav_frame.c_str());
 		}
 
 		pcl::PointXYZI p;
@@ -289,10 +289,10 @@ std::vector<std::pair<ros::Time, Eigen::Vector3d>> FilterReflectiveUavs::transfr
 			
 			centroid_positions_global.emplace_back(centroid_time, centroid_global);
 			
-			std::cout << "[Filter]: Detected Centroid transformed (Global Frame): ["
-					<< centroid_global.x() << ", "
-					<< centroid_global.y() << ", "
-					<< centroid_global.z() << "]" << std::endl;
+			// std::cout << "[Filter]: Detected Centroid transformed (Global Frame): ["
+					// << centroid_global.x() << ", "
+					// << centroid_global.y() << ", "
+					// << centroid_global.z() << "]" << std::endl;
 
 		} else {
 			ROS_WARN_THROTTLE(1.0, "[Filter]: Failed to transform a centroid to global frame.");
@@ -549,7 +549,7 @@ std::vector<std::pair<ros::Time, Eigen::Vector3d>> FilterReflectiveUavs::cluster
 	reflectivity_filt.filter(*cloud_reflective);
 	// ROS_INFO_THROTTLE(1.0, "[CentroidsClustering]: Reflective points in cloud found: %d, (min threshold: %f)", (int)cloud_reflective->size(), _min_intensity_);
 	if (cloud_reflective->size() == 0) {
-		ROS_WARN_THROTTLE(1.0, "[CentroidsClustering]: No reflective points in cloud (min threshold: %f)", _min_intensity_);
+		// ROS_WARN_THROTTLE(1.0, "[CentroidsClustering]: No reflective points in cloud (min threshold: %f)", _min_intensity_);
 		return centroid_positions;
 	}
 
@@ -626,7 +626,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 	std::vector<int> seed_indices;
 	pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
 
-    std::cout << "Injecting this many points to pcl: " << tracks.size() << std::endl;
+    // std::cout << "Injecting this many points to pcl: " << tracks.size() << std::endl;
 	for (const auto& track : tracks) {
 		pcl::PointXYZI p;
 		const Eigen::Vector3d neigh_pos = Eigen::Vector3d(track.x[0], track.x[1], track.x[2]);
@@ -722,7 +722,7 @@ void FilterReflectiveUavs::filterOutUavs(pcl::PointCloud<pcl::PointXYZI>::Ptr pc
 		}
 	}
 
-	std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
+	// std::cout << "[Livox] Removed points: " << pcl_cloud->points.size() - environment_cloud->points.size() << std::endl;
 
 	sensor_msgs::PointCloud2 output_msg;
 	pcl::toROSMsg(*environment_cloud, output_msg);
