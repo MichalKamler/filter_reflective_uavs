@@ -1,57 +1,37 @@
 <?xml version="1.0"?>
-<package format="2">
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
   <name>filter_reflective_uavs</name>
   <version>0.0.0</version>
   <description>The filter_reflective_uavs package</description>
-
   <maintainer email="kamlem2002@gmail.com">Michal Kamler</maintainer>
-
-
   <license>TODO</license>
 
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
-  <buildtool_depend>catkin</buildtool_depend>
-  <build_depend> mrs_lib</build_depend>
-  <build_depend> mrs_msgs</build_depend>
-  <build_depend> nav_msgs</build_depend>
-  <build_depend> nodelet</build_depend>
-  <build_depend> ouster_ros</build_depend>
-  <build_depend> pcl_conversions</build_depend>
-  <build_depend> pcl_ros</build_depend>
-  <build_depend> roscpp</build_depend>
-  <build_depend> tf2</build_depend>
-  <build_depend> tf2_ros</build_depend>
-  <build_export_depend> mrs_lib</build_export_depend>
-  <build_export_depend> mrs_msgs</build_export_depend>
-  <build_export_depend> nav_msgs</build_export_depend>
-  <build_export_depend> nodelet</build_export_depend>
-  <build_export_depend> ouster_ros</build_export_depend>
-  <build_export_depend> pcl_conversions</build_export_depend>
-  <build_export_depend> pcl_ros</build_export_depend>
-  <build_export_depend> roscpp</build_export_depend>
-  <build_export_depend> tf2</build_export_depend>
-  <build_export_depend> tf2_ros</build_export_depend>
-  <exec_depend> mrs_lib</exec_depend>
-  <exec_depend> mrs_msgs</exec_depend>
-  <exec_depend> nav_msgs</exec_depend>
-  <exec_depend> nodelet</exec_depend>
-  <exec_depend> ouster_ros</exec_depend>
-  <exec_depend> pcl_conversions</exec_depend>
-  <exec_depend> pcl_ros</exec_depend>
-  <exec_depend> roscpp</exec_depend>
-  <exec_depend> tf2</exec_depend>
-  <exec_depend> tf2_ros</exec_depend>
-  <depend>std_msgs</depend>
+  <depend>Eigen3</depend>
   <depend>geometry_msgs</depend>
-  <build_depend>message_generation</build_depend>
-  <exec_depend>message_runtime</exec_depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>mrs_lib</depend>
+  <depend>mrs_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>ouster_ros</depend>
+  <depend>pcl_conversions</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
 
+  <exec_depend>rosidl_default_runtime</exec_depend>
 
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
-  <!-- The export tag contains other, unspecified, tags -->
   <export>
-    <!-- Other tools can request additional information be placed here -->
-    <nodelet plugin="${prefix}/plugins.xml" />
-
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
