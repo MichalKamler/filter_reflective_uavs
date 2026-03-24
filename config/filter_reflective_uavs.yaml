@@ -7,8 +7,12 @@ filter_reflective_uavs:
     max_removed_points: 200
     ouster: false
     time_keep: 0.2
-    load_gt_uav_positions: false
+    load_gt_uav_positions: true
     keep_cloud_dt: 0.01
+
+    filter_out_myself: 
+      enabled: true
+      dist: 1.0
 
     reflective_clusters:
       tolerance: 0.4
@@ -25,3 +29,5 @@ filter_reflective_uavs:
       dt: 0.2
       max_no_update: 1.0
       gate_treshold: 2.0
+
+detected_uav_names: [uav1, uav2]

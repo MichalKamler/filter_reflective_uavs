@@ -37,8 +37,16 @@ void FilterReflectiveUavs::initialize() {
   }
 
   if (load_gt_uav_positions_) {
-    sh_pointcloud_pos_ = mrs_lib::SubscriberHandler<PointCloudMsg>(
-      shopts, "uav_positions_in", &FilterReflectiveUavs::pointCloud2PosCallback, this);
+    if (detected_uav_names_.empty()) {
+      sh_pointcloud_pos_ = mrs_lib::SubscriberHandler<PointCloudMsg>(
+        shopts, "uav_positions_in", &FilterReflectiveUavs::pointCloud2PosCallback, this);
+      RCLCPP_INFO(node_->get_logger(), "GT injection source: uav_positions_in topic");
+    } else {
+      RCLCPP_INFO(
+        node_->get_logger(),
+        "GT injection source: TF frames of %zu configured UAVs",
+        detected_uav_names_.size());
+    }
   }
 
   sh_odom_ = mrs_lib::SubscriberHandler<OdomMsg>(
@@ -48,14 +56,14 @@ void FilterReflectiveUavs::initialize() {
   popts.qos = rclcpp::QoS(10).transient_local();
 
   publisher_pointcloud_reflective_centroids_ =
-    mrs_lib::PublisherHandler<PointCloudMsg>(node_, "reflective_centroids_out");
-  publisher_estimates_ = mrs_lib::PublisherHandler<PoseArrayMsg>(node_, "estimates");
-  pub_pointcloud_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "filtered_pcl");
-  pub_pointcloud_removed_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "removed_pcl");
-  pub_seeds_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "seeds");
-  pub_agent_pcl_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "agents_pcl");
-  pub_velocity_markers_ = mrs_lib::PublisherHandler<visualization_msgs::msg::MarkerArray>(popts, "velocity_viz");
-  pub_pose_vel_array_ = mrs_lib::PublisherHandler<filter_reflective_uavs::msg::PoseVelocityArray>(popts, "pose_velocity_array");
+    mrs_lib::PublisherHandler<PointCloudMsg>(node_, "~/reflective_centroids_out");
+  publisher_estimates_ = mrs_lib::PublisherHandler<PoseArrayMsg>(node_, "~/estimates");
+  pub_pointcloud_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "~/filtered_pcl");
+  pub_pointcloud_removed_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "~/removed_pcl");
+  pub_seeds_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "~/seeds");
+  pub_agent_pcl_ = mrs_lib::PublisherHandler<PointCloudMsg>(popts, "~/agents_pcl");
+  pub_velocity_markers_ = mrs_lib::PublisherHandler<visualization_msgs::msg::MarkerArray>(popts, "~/velocity_viz");
+  pub_pose_vel_array_ = mrs_lib::PublisherHandler<filter_reflective_uavs::msg::PoseVelocityArray>(popts, "~/pose_velocity_array");
 
   last_update_ = std::chrono::steady_clock::now();
   is_initialized_ = true;
@@ -67,6 +75,7 @@ void FilterReflectiveUavs::loadParameters() {
   node_->declare_parameter<std::string>("custom_config", "");
   node_->declare_parameter<std::string>("uav_name", "");
   node_->declare_parameter<std::string>("global_frame", "world");
+  node_->declare_parameter<std::vector<std::string>>("detected_uav_names", std::vector<std::string>{});
 
   mrs_lib::ParamLoader param_loader(node_);
   param_loader.addYamlFileFromParam("config");
@@ -93,6 +102,9 @@ void FilterReflectiveUavs::loadParameters() {
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/ouster", ouster_);
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/load_gt_uav_positions", load_gt_uav_positions_);
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/time_keep", time_keep_);
+  param_loader.loadParam("filter_reflective_uavs/ros_parameters/filter_out_myself/enabled", filter_out_myself_enabled_);
+  param_loader.loadParam("filter_reflective_uavs/ros_parameters/filter_out_myself/dist", filter_out_myself_dist_);
+  param_loader.loadParam("detected_uav_names", detected_uav_names_);
 
   if (!param_loader.loadedSuccessfully()) {
     RCLCPP_ERROR(node_->get_logger(), "failed to load non-optional parameters!");
@@ -114,19 +126,55 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const PointCloudMsgPtr msg) 
   pcl::fromROSMsg(*msg, *ouster_cloud);
 
   auto xyzi_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
-  xyzi_cloud->width = ouster_cloud->width;
-  xyzi_cloud->height = ouster_cloud->height;
   xyzi_cloud->is_dense = ouster_cloud->is_dense;
-  xyzi_cloud->points.resize(ouster_cloud->points.size());
+  size_t excluded_myself_points = 0;
+  if (filter_out_myself_enabled_) {
+    const float min_sq_dist_from_sensor =
+      static_cast<float>(filter_out_myself_dist_ * filter_out_myself_dist_);
+    xyzi_cloud->points.reserve(ouster_cloud->points.size());
 
-  for (size_t i = 0; i < ouster_cloud->points.size(); ++i) {
-    const auto & ouster_point = ouster_cloud->points[i];
-    pcl::PointXYZI xyzi_point;
-    xyzi_point.x = ouster_point.x;
-    xyzi_point.y = ouster_point.y;
-    xyzi_point.z = ouster_point.z;
-    xyzi_point.intensity = ouster_point.reflectivity;
-    xyzi_cloud->points[i] = xyzi_point;
+    for (const auto & ouster_point : ouster_cloud->points) {
+      const float sq_dist_from_sensor =
+        ouster_point.x * ouster_point.x +
+        ouster_point.y * ouster_point.y +
+        ouster_point.z * ouster_point.z;
+
+      if (sq_dist_from_sensor < min_sq_dist_from_sensor) {
+        ++excluded_myself_points;
+        continue;
+      }
+
+      pcl::PointXYZI xyzi_point;
+      xyzi_point.x = ouster_point.x;
+      xyzi_point.y = ouster_point.y;
+      xyzi_point.z = ouster_point.z;
+      xyzi_point.intensity = ouster_point.reflectivity;
+      xyzi_cloud->points.push_back(xyzi_point);
+    }
+
+    xyzi_cloud->width = static_cast<uint32_t>(xyzi_cloud->points.size());
+    xyzi_cloud->height = 1;
+  } else {
+    xyzi_cloud->width = ouster_cloud->width;
+    xyzi_cloud->height = ouster_cloud->height;
+    xyzi_cloud->points.resize(ouster_cloud->points.size());
+
+    for (size_t i = 0; i < ouster_cloud->points.size(); ++i) {
+      const auto & ouster_point = ouster_cloud->points[i];
+      pcl::PointXYZI xyzi_point;
+      xyzi_point.x = ouster_point.x;
+      xyzi_point.y = ouster_point.y;
+      xyzi_point.z = ouster_point.z;
+      xyzi_point.intensity = ouster_point.reflectivity;
+      xyzi_cloud->points[i] = xyzi_point;
+    }
+  }
+
+  if (filter_out_myself_enabled_) {
+    RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *clock_, 1000,
+      "Excluded %zu self points from Ouster cloud",
+      excluded_myself_points);
   }
 
   if (load_gt_uav_positions_) {
@@ -169,6 +217,42 @@ void FilterReflectiveUavs::callbackPointCloud(const PointCloudMsgPtr msg) {
 
   const std::string frame_id = msg->header.frame_id;
   const rclcpp::Time timestamp(msg->header.stamp);
+
+  size_t excluded_myself_points = 0;
+  if (filter_out_myself_enabled_) {
+    const float min_sq_dist_from_sensor =
+      static_cast<float>(filter_out_myself_dist_ * filter_out_myself_dist_);
+    size_t write_idx = 0;
+
+    for (size_t i = 0; i < pcl_cloud->points.size(); ++i) {
+      const auto & point = pcl_cloud->points[i];
+      const float sq_dist_from_sensor =
+        point.x * point.x +
+        point.y * point.y +
+        point.z * point.z;
+
+      if (sq_dist_from_sensor < min_sq_dist_from_sensor) {
+        ++excluded_myself_points;
+        continue;
+      }
+
+      if (write_idx != i) {
+        pcl_cloud->points[write_idx] = point;
+      }
+      ++write_idx;
+    }
+
+    if (write_idx != pcl_cloud->points.size()) {
+      pcl_cloud->points.resize(write_idx);
+      pcl_cloud->width = static_cast<uint32_t>(write_idx);
+      pcl_cloud->height = 1;
+    }
+
+    RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *clock_, 1000,
+      "Excluded %zu self points from input cloud",
+      excluded_myself_points);
+  }
 
   if (load_gt_uav_positions_) {
     injectGtUavPositions(pcl_cloud, frame_id, timestamp);
@@ -752,6 +836,11 @@ void FilterReflectiveUavs::pointCloud2PosCallback(const PointCloudMsgPtr msg) {
         return (now_time - entry.first).seconds() > time_keep_;
       }),
     uav_positions_.end());
+
+  RCLCPP_INFO_THROTTLE(
+    node_->get_logger(), *clock_, 1000,
+    "Received %zu GT UAV positions on uav_positions_in, cached %zu positions",
+    pcl_cloud.points.size(), uav_positions_.size());
 }
 
 void FilterReflectiveUavs::odomCallback(const OdomMsgPtr msg) {
@@ -765,13 +854,60 @@ void FilterReflectiveUavs::injectGtUavPositions(
   pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud,
   const std::string & frame_id,
   const rclcpp::Time & timestamp) const {
+  if (!detected_uav_names_.empty()) {
+    size_t injected_count = 0;
+    size_t transform_failed_count = 0;
+
+    for (const auto & detected_uav_name : detected_uav_names_) {
+      if (detected_uav_name == uav_name_) {
+        continue;
+      }
+
+      const auto transformed_point = transformPoint(
+        Eigen::Vector3d::Zero(), detected_uav_name + "/fcu", frame_id, timestamp);
+
+      if (!transformed_point.has_value()) {
+        ++transform_failed_count;
+        continue;
+      }
+
+      pcl::PointXYZI p;
+      p.x = static_cast<float>(transformed_point->x());
+      p.y = static_cast<float>(transformed_point->y());
+      p.z = static_cast<float>(transformed_point->z());
+      p.intensity = static_cast<float>(max_intensity_);
+
+      pcl_cloud->points.push_back(p);
+      pcl_cloud->width = static_cast<uint32_t>(pcl_cloud->points.size());
+      pcl_cloud->height = 1;
+      ++injected_count;
+    }
+
+    RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *clock_, 1000,
+      "Injected %zu GT UAV points from TF into cloud for frame %s (%zu TF failures, %zu configured UAVs)",
+      injected_count, frame_id.c_str(), transform_failed_count, detected_uav_names_.size());
+    return;
+  }
+
   std::shared_lock<std::shared_mutex> lock(uav_positions_mutex_);
+
+  if (uav_positions_.empty()) {
+    RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *clock_, 1000,
+      "GT injection skipped: no cached UAV positions available on uav_positions_in");
+    return;
+  }
+
+  size_t injected_count = 0;
+  size_t transform_failed_count = 0;
 
   for (const auto & uav_pos : uav_positions_) {
     const auto transformed_point =
       transformPoint(uav_pos.second, global_frame_, frame_id, timestamp);
 
     if (!transformed_point.has_value()) {
+      ++transform_failed_count;
       continue;
     }
 
@@ -784,7 +920,13 @@ void FilterReflectiveUavs::injectGtUavPositions(
     pcl_cloud->points.push_back(p);
     pcl_cloud->width = static_cast<uint32_t>(pcl_cloud->points.size());
     pcl_cloud->height = 1;
+    ++injected_count;
   }
+
+  RCLCPP_INFO_THROTTLE(
+    node_->get_logger(), *clock_, 1000,
+    "Injected %zu GT UAV points into cloud for frame %s (%zu TF failures, %zu cached positions)",
+    injected_count, frame_id.c_str(), transform_failed_count, uav_positions_.size());
 }
 
 std::optional<geometry_msgs::msg::TransformStamped> FilterReflectiveUavs::lookupTransform(

@@ -180,6 +180,7 @@ private:
 
   std::string uav_name_;
   std::string global_frame_;
+  std::vector<std::string> detected_uav_names_;
   double min_intensity_{250.0};
   double max_intensity_{255.0};
   std::vector<Track> tracks_;
@@ -198,6 +199,8 @@ private:
   double search_radius_{1.0};
   double max_distance_from_seed_{1.0};
   int max_removed_points_{200};
+  bool filter_out_myself_enabled_{true};
+  double filter_out_myself_dist_{1.0};
   bool ouster_{true};
   bool load_gt_uav_positions_{false};
   double time_keep_{0.2};
