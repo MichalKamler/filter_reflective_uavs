@@ -30,7 +30,7 @@ def generate_launch_description():
             },
         ],
         remappings=[
-            ("lidar3d_in", "ouster/points"),
+            ("~/lidar3d_in", "livox/points"),
         ],
     )
 

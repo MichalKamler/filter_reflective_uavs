@@ -7,7 +7,7 @@ filter_reflective_uavs:
     max_removed_points: 200
     ouster: false
     time_keep: 0.2
-    load_gt_uav_positions: true
+    load_gt_uav_positions: false
     keep_cloud_dt: 0.01
 
     filter_out_myself: 

@@ -30,10 +30,10 @@ void FilterReflectiveUavs::initialize() {
 
   if (ouster_) {
     sh_pointcloud_ = mrs_lib::SubscriberHandler<PointCloudMsg>(
-      shopts, "lidar3d_in", &FilterReflectiveUavs::callbackPointCloudOuster, this);
+      shopts, "~/lidar3d_in", &FilterReflectiveUavs::callbackPointCloudOuster, this);
   } else {
     sh_pointcloud_ = mrs_lib::SubscriberHandler<PointCloudMsg>(
-      shopts, "lidar3d_in", &FilterReflectiveUavs::callbackPointCloud, this);
+      shopts, "~/lidar3d_in", &FilterReflectiveUavs::callbackPointCloud, this);
   }
 
   if (load_gt_uav_positions_) {
@@ -114,6 +114,7 @@ void FilterReflectiveUavs::loadParameters() {
 }
 
 void FilterReflectiveUavs::callbackPointCloudOuster(const PointCloudMsgPtr msg) {
+  RCLCPP_INFO(node_->get_logger(), "[Ouster] Entered ouster cb.");
   if (!is_initialized_) {
     return;
   }
@@ -129,6 +130,7 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const PointCloudMsgPtr msg) 
   xyzi_cloud->is_dense = ouster_cloud->is_dense;
   size_t excluded_myself_points = 0;
   if (filter_out_myself_enabled_) {
+    RCLCPP_INFO(node_->get_logger(), "[Ouster] Filtering out myself.");
     const float min_sq_dist_from_sensor =
       static_cast<float>(filter_out_myself_dist_ * filter_out_myself_dist_);
     xyzi_cloud->points.reserve(ouster_cloud->points.size());
@@ -173,11 +175,12 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const PointCloudMsgPtr msg) 
   if (filter_out_myself_enabled_) {
     RCLCPP_INFO_THROTTLE(
       node_->get_logger(), *clock_, 1000,
-      "Excluded %zu self points from Ouster cloud",
+      "[Ouster] Excluded %zu self points from Ouster cloud",
       excluded_myself_points);
   }
 
   if (load_gt_uav_positions_) {
+    RCLCPP_INFO(node_->get_logger(), "[Ouster] Loading gt uav pos.");
     injectGtUavPositions(xyzi_cloud, frame_id, timestamp);
   }
 
@@ -208,6 +211,7 @@ void FilterReflectiveUavs::callbackPointCloudOuster(const PointCloudMsgPtr msg) 
 }
 
 void FilterReflectiveUavs::callbackPointCloud(const PointCloudMsgPtr msg) {
+  RCLCPP_INFO(node_->get_logger(),"[Livox] Livox cb.");
   if (!is_initialized_) {
     return;
   }
@@ -220,6 +224,7 @@ void FilterReflectiveUavs::callbackPointCloud(const PointCloudMsgPtr msg) {
 
   size_t excluded_myself_points = 0;
   if (filter_out_myself_enabled_) {
+    RCLCPP_INFO(node_->get_logger(),"[Livox] Filtering out myself");
     const float min_sq_dist_from_sensor =
       static_cast<float>(filter_out_myself_dist_ * filter_out_myself_dist_);
     size_t write_idx = 0;
@@ -255,6 +260,7 @@ void FilterReflectiveUavs::callbackPointCloud(const PointCloudMsgPtr msg) {
   }
 
   if (load_gt_uav_positions_) {
+    RCLCPP_INFO(node_->get_logger(),"[Livox] Loading gt uav pos.");
     injectGtUavPositions(pcl_cloud, frame_id, timestamp);
   }
 
@@ -280,7 +286,7 @@ void FilterReflectiveUavs::callbackPointCloud(const PointCloudMsgPtr msg) {
     publishVelAsArrow(global_frame_, timestamp, tracks_);
     last_update_ = now;
   }
-
+  
   filterOutUavs(pcl_cloud, frame_id, timestamp, tracks_);
 }
 
