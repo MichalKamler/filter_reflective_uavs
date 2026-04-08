@@ -10,6 +10,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     uav_name = LaunchConfiguration("uav_name")
     global_frame = LaunchConfiguration("global_frame")
+    lidar3d_in = LaunchConfiguration("lidar3d_in")
     standalone = LaunchConfiguration("standalone")
     container_name = LaunchConfiguration("container_name")
     config_file = PathJoinSubstitution(
@@ -30,13 +31,15 @@ def generate_launch_description():
             },
         ],
         remappings=[
-            ("~/lidar3d_in", "livox/points"),
+            ("~/lidar3d_in", lidar3d_in),
+            ("~/poses_vel_out", "filter_reflective_uavs/pose_vel"),
         ],
     )
 
     return LaunchDescription([
         DeclareLaunchArgument("uav_name", default_value="uav1"),
         DeclareLaunchArgument("global_frame", default_value=[uav_name, "/world_origin"]),
+        DeclareLaunchArgument("lidar3d_in", default_value="livox/points"),
         DeclareLaunchArgument("standalone", default_value="true"),
         DeclareLaunchArgument("container_name", default_value=""),
         LoadComposableNodes(

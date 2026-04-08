@@ -1,33 +1,31 @@
 filter_reflective_uavs:
   ros_parameters:
-    min_intensity: 250.0
-    max_intensity: 255.0
-    search_radius: 1.0
-    max_distance_from_seed: 1.0
-    max_removed_points: 200
-    ouster: false
-    time_keep: 0.2
-    load_gt_uav_positions: false
-    keep_cloud_dt: 0.01
+    min_intensity: 220.0                        # minimum point intensity treated as reflective
+    max_intensity: 255.0                        # intensity assigned to injected synthetic points
+    search_radius: 1.0                          # neighbor radius used for track association and region growing
+    max_distance_from_seed: 1.0                 # max distance from reflective seed before a point is removed
+    time_keep: 0.2                              # how long cached GT/detected positions stay valid for readdition
+    simulation: true                            # enable simulated GT UAV point addition to pcl
+    debug: false                                # enable debug logging
 
-    filter_out_myself: 
-      enabled: true
-      dist: 1.0
+    filter_out_myself:                          # remove points that belong to this UAV near the sensor
+      enabled: true                             # turn self-point removal on or off
+      dist: 1.0                                 # radius around the sensor to discard as self points
 
-    reflective_clusters:
-      tolerance: 0.4
-      min_points: 1
-      max_points: 999999
+    reflective_clusters:                        # clustering settings for reflective points
+      tolerance: 0.4                            # max distance between points in one cluster
+      min_points: 1                             # minimum number of points required for a cluster
+      max_points: 999999                        # maximum number of points allowed in a cluster
 
-    voxel_grid:
-      use: true
-      size_x: 0.04
-      size_y: 0.04
-      size_z: 0.04
+    voxel_grid:                                 # optional downsampling before clustering
+      use: true                                 # enable voxel-grid downsampling
+      size_x: 0.04                              # voxel size in x
+      size_y: 0.04                              # voxel size in y
+      size_z: 0.04                              # voxel size in z
 
-    multi_uav_tracker:
-      dt: 0.2
-      max_no_update: 1.0
-      gate_treshold: 2.0
+    multi_uav_tracker:                          # motion-tracker timing and gating
+      dt: 0.2                                   # prediction/update timestep used by the tracker
+      max_no_update: 1.0                        # remove tracks not updated for longer than this
+      gate_treshold: 1.2                        # max association distance allowed for a track match 
 
-detected_uav_names: [uav1, uav2]
+detected_uav_names: [uav1, uav2]                # UAV names used to load GT positions from TF in simulation
