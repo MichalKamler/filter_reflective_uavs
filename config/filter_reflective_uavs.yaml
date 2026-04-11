@@ -5,6 +5,7 @@ filter_reflective_uavs:
     search_radius: 1.0                          # neighbor radius used for track association and region growing
     max_distance_from_seed: 1.0                 # max distance from reflective seed before a point is removed
     time_keep: 0.2                              # how long cached GT/detected positions stay valid for readdition
+    subscriber_queue_size: 50                   # input subscription queue depth; larger values absorb short processing spikes
     simulation: true                            # enable simulated GT UAV point addition to pcl
     debug: false                                # enable debug logging
 

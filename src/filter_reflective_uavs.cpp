@@ -1,6 +1,24 @@
 #include <filter_reflective_uavs/filter_reflective_uavs.h>
 
+#include <cstdint>
+
 #include <tf2/time.h>
+
+namespace {
+
+Eigen::Vector3d transformEigenPoint(const Eigen::Vector3d&                          point,
+                                    const geometry_msgs::msg::TransformStamped&      transform)
+{
+  const auto & rotation = transform.transform.rotation;
+  const auto & translation = transform.transform.translation;
+
+  const Eigen::Quaterniond quat(rotation.w, rotation.x, rotation.y, rotation.z);
+  const Eigen::Vector3d translated(translation.x, translation.y, translation.z);
+
+  return quat * point + translated;
+}
+
+}  // namespace
 
 namespace filter_reflective_uavs {
 
@@ -13,7 +31,8 @@ void FilterReflectiveUavs::initialize()
 {
   node_ = this->this_node_ptr();
   clock_ = node_->get_clock();
-  cbkgrp_subs_ = this_node().create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  cbkgrp_lidar_ = this_node().create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  cbkgrp_aux_ = this_node().create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(clock_);
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
@@ -26,21 +45,26 @@ void FilterReflectiveUavs::initialize()
   shopts.node_name = "FilterReflectiveUavs";
   shopts.threadsafe = true;
   shopts.autostart = true;
-  shopts.qos = rclcpp::QoS(rclcpp::KeepLast(10));
-  shopts.subscription_options.callback_group = cbkgrp_subs_;
+  shopts.qos = rclcpp::QoS(rclcpp::KeepLast(static_cast<size_t>(std::max(1, subscriber_queue_size_))));
 
-  sh_pointcloud_ = mrs_lib::SubscriberHandler<PointCloudMsg>(shopts, "~/lidar3d_in", &FilterReflectiveUavs::callbackPointCloud, this);
+  auto lidar_shopts = shopts;
+  lidar_shopts.subscription_options.callback_group = cbkgrp_lidar_;
+
+  auto aux_shopts = shopts;
+  aux_shopts.subscription_options.callback_group = cbkgrp_aux_;
+
+  sh_pointcloud_ = mrs_lib::SubscriberHandler<PointCloudMsg>(lidar_shopts, "~/lidar3d_in", &FilterReflectiveUavs::callbackPointCloud, this);
 
   if (simulation_) {
     if (detected_uav_names_.empty()) {
-      sh_pointcloud_pos_ = mrs_lib::SubscriberHandler<PointCloudMsg>(shopts, "uav_positions_in", &FilterReflectiveUavs::pointCloud2PosCallback, this);
+      sh_pointcloud_pos_ = mrs_lib::SubscriberHandler<PointCloudMsg>(aux_shopts, "uav_positions_in", &FilterReflectiveUavs::pointCloud2PosCallback, this);
       RCLCPP_INFO(node_->get_logger(), "Subscribed to ground truth of other uavs");
     } else {
       RCLCPP_INFO(node_->get_logger(),"TF frames of %zu configured UAVs", detected_uav_names_.size());
     }
   }
 
-  sh_odom_ = mrs_lib::SubscriberHandler<OdomMsg>(shopts, "/" + uav_name_ + "/estimation_manager/odom_main", &FilterReflectiveUavs::odomCallback, this);
+  sh_odom_ = mrs_lib::SubscriberHandler<OdomMsg>(aux_shopts, "/" + uav_name_ + "/estimation_manager/odom_main", &FilterReflectiveUavs::odomCallback, this);
 
   mrs_lib::PublisherHandlerOptions popts(node_);
   popts.qos = rclcpp::QoS(10).transient_local();
@@ -90,6 +114,7 @@ void FilterReflectiveUavs::loadParameters()
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/search_radius", search_radius_);
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/max_distance_from_seed", max_distance_from_seed_);
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/time_keep", time_keep_);
+  param_loader.loadParam("filter_reflective_uavs/ros_parameters/subscriber_queue_size", subscriber_queue_size_);
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/filter_out_myself/enabled", filter_out_myself_enabled_);
   param_loader.loadParam("filter_reflective_uavs/ros_parameters/filter_out_myself/dist", filter_out_myself_dist_);
   param_loader.loadParam("detected_uav_names", detected_uav_names_);
@@ -149,7 +174,9 @@ void FilterReflectiveUavs::callbackPointCloud(const PointCloudMsgPtr msg)
   }
 
   if (simulation_) {
-    RCLCPP_INFO(node_->get_logger(),"Loading gt neighboring uavs positions");
+    if (debug_) {
+      RCLCPP_INFO(node_->get_logger(),"Loading gt neighboring uavs positions");
+    }
     addPointsToCloud(pcl_cloud, loadGtUavCentroids(frame_id, timestamp));
   }
 
@@ -215,22 +242,29 @@ std::vector<FilterReflectiveUavs::StampPositionPair> FilterReflectiveUavs::trans
   if (debug_) {
     RCLCPP_INFO(node_->get_logger(),"Transform and publish centroids");
   }
-  auto cloud_reflective_centroids = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+  pcl::PointCloud<pcl::PointXYZ> cloud_reflective_centroids;
+  cloud_reflective_centroids.points.reserve(centroid_positions.size());
+
   std::vector<StampPositionPair> centroid_positions_global;
+  centroid_positions_global.reserve(centroid_positions.size());
+
+  const auto transform = lookupTransform(global_frame_, frame_id, timestamp);
+  if (!transform.has_value() && !centroid_positions.empty()) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000, "Failed to transform centroids to the global frame");
+  }
 
   for (const auto & centroid_pair : centroid_positions) {
-    const auto transformed_point = transformPoint(centroid_pair.second, frame_id, global_frame_, centroid_pair.first);
-
-    if (transformed_point.has_value()) {
-      cloud_reflective_centroids->push_back(pcl::PointXYZ(static_cast<float>(transformed_point->x()), static_cast<float>(transformed_point->y()), static_cast<float>(transformed_point->z())));
-      centroid_positions_global.emplace_back(centroid_pair.first, *transformed_point);
-    } else {
-      RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000, "Failed to transform a centroid to the global frame");
+    if (!transform.has_value()) {
+      break;
     }
+
+    const Eigen::Vector3d transformed_point = transformEigenPoint(centroid_pair.second, *transform);
+    cloud_reflective_centroids.push_back(pcl::PointXYZ(static_cast<float>(transformed_point.x()), static_cast<float>(transformed_point.y()), static_cast<float>(transformed_point.z())));
+    centroid_positions_global.emplace_back(centroid_pair.first, transformed_point);
   }
 
   PointCloudMsg cloud_msg;
-  pcl::toROSMsg(*cloud_reflective_centroids, cloud_msg);
+  pcl::toROSMsg(cloud_reflective_centroids, cloud_msg);
   cloud_msg.header.frame_id = global_frame_;
   cloud_msg.header.stamp = timestamp;
   publisher_pointcloud_reflective_centroids_.publish(cloud_msg);
@@ -449,9 +483,9 @@ void FilterReflectiveUavs::publishEstimates(const std::string&         frame_id,
 }
 
 std::vector<FilterReflectiveUavs::StampPositionPair>
-FilterReflectiveUavs::clusterToCentroids( pcl::PointCloud<pcl::PointXYZI>::Ptr cloud,
-                                          const rclcpp::Time& timestamp,
-                                          const std::string&  frame_id) const 
+FilterReflectiveUavs::clusterToCentroids( pcl::PointCloud<pcl::PointXYZI>::ConstPtr cloud,
+                                          const rclcpp::Time&                        timestamp,
+                                          const std::string&                         frame_id) const
 {
   if (debug_) {
     RCLCPP_INFO(node_->get_logger(),"Cluster to centroids");
@@ -465,25 +499,35 @@ FilterReflectiveUavs::clusterToCentroids( pcl::PointCloud<pcl::PointXYZI>::Ptr c
   }
 
   auto cloud_reflective = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
-  pcl::ConditionAnd<pcl::PointXYZI>::Ptr reflectivity_cond(new pcl::ConditionAnd<pcl::PointXYZI>());
-  reflectivity_cond->addComparison(pcl::FieldComparison<pcl::PointXYZI>::Ptr(new pcl::FieldComparison<pcl::PointXYZI>("intensity", pcl::ComparisonOps::GT, static_cast<float>(min_intensity_))));
+  cloud_reflective->points.reserve(cloud->points.size());
 
-  pcl::ConditionalRemoval<pcl::PointXYZI> reflectivity_filt;
-  reflectivity_filt.setCondition(reflectivity_cond);
-  reflectivity_filt.setKeepOrganized(false);
-  reflectivity_filt.setInputCloud(cloud);
-  reflectivity_filt.filter(*cloud_reflective);
+  const float min_intensity = static_cast<float>(min_intensity_);
+  for (const auto & point : cloud->points) {
+    if (point.intensity > min_intensity) {
+      cloud_reflective->points.push_back(point);
+    }
+  }
+
+  cloud_reflective->width = static_cast<uint32_t>(cloud_reflective->points.size());
+  cloud_reflective->height = 1;
+  cloud_reflective->is_dense = cloud->is_dense;
 
   if (cloud_reflective->empty()) {
     return centroid_positions;
   }
 
   if (use_voxel_grid_) {
+    auto cloud_reflective_downsampled = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
     pcl::VoxelGrid<pcl::PointXYZI> vg;
-    vg.setInputCloud(cloud);
+    vg.setInputCloud(cloud_reflective);
     vg.setDownsampleAllData(false);
     vg.setLeafSize(static_cast<float>(voxel_grid_size_x_), static_cast<float>(voxel_grid_size_y_), static_cast<float>(voxel_grid_size_z_));
-    vg.filter(*cloud);
+    vg.filter(*cloud_reflective_downsampled);
+    cloud_reflective = cloud_reflective_downsampled;
+
+    if (cloud_reflective->empty()) {
+      return centroid_positions;
+    }
   }
 
   auto tree_reflective = std::make_shared<pcl::search::KdTree<pcl::PointXYZI>>();
@@ -495,6 +539,7 @@ FilterReflectiveUavs::clusterToCentroids( pcl::PointCloud<pcl::PointXYZI>::Ptr c
 
   RCLCPP_INFO_THROTTLE(node_->get_logger(), *clock_, 1000, "Found %zu reflective centroids", centroids_reflective.size());
 
+  centroid_positions.reserve(centroids_reflective.size());
   for (const auto & pt : centroids_reflective) {
     centroid_positions.emplace_back(timestamp, Eigen::Vector3d(pt.x, pt.y, pt.z));
   }
@@ -502,30 +547,40 @@ FilterReflectiveUavs::clusterToCentroids( pcl::PointCloud<pcl::PointXYZI>::Ptr c
   return centroid_positions;
 }
 
-void FilterReflectiveUavs::calculateCentroid(const pcl::PointCloud<pcl::PointXYZI>::Ptr  cloud,
-                                              const std::vector<pcl::PointIndices>&        cluster_indices,
-                                              std::vector<pcl::PointXYZ>&                  result) const 
+void FilterReflectiveUavs::calculateCentroid(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr cloud,
+                                             const std::vector<pcl::PointIndices>&           cluster_indices,
+                                             std::vector<pcl::PointXYZ>&                     result) const
 {
   if (debug_) {
     RCLCPP_INFO(node_->get_logger(),"Calculate centroid");
   }
+  result.reserve(result.size() + cluster_indices.size());
+
   for (const auto & cluster : cluster_indices) {
-    pcl::CentroidPoint<pcl::PointXYZ> centroid;
-    for (const auto & index : cluster.indices) {
-      pcl::PointXYZ pt;
-      pt.x = cloud->at(static_cast<size_t>(index)).x;
-      pt.y = cloud->at(static_cast<size_t>(index)).y;
-      pt.z = cloud->at(static_cast<size_t>(index)).z;
-      centroid.add(pt);
+    if (cluster.indices.empty()) {
+      continue;
     }
-    pcl::PointXYZ center_pt;
-    centroid.get(center_pt);
-    result.push_back(center_pt);
+
+    double x_sum = 0.0;
+    double y_sum = 0.0;
+    double z_sum = 0.0;
+
+    for (const auto index : cluster.indices) {
+      const auto & point = cloud->points[static_cast<size_t>(index)];
+      x_sum += point.x;
+      y_sum += point.y;
+      z_sum += point.z;
+    }
+
+    const double scale = 1.0 / static_cast<double>(cluster.indices.size());
+    result.emplace_back(static_cast<float>(x_sum * scale),
+                        static_cast<float>(y_sum * scale),
+                        static_cast<float>(z_sum * scale));
   }
 }
 
-std::vector<pcl::PointIndices> FilterReflectiveUavs::doEuclideanClustering(const pcl::search::KdTree<pcl::PointXYZI>::Ptr tree_orig,
-                                                                          const pcl::PointCloud<pcl::PointXYZI>::Ptr      cloud,
+std::vector<pcl::PointIndices> FilterReflectiveUavs::doEuclideanClustering(const pcl::search::KdTree<pcl::PointXYZI>::Ptr& tree_orig,
+                                                                          const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& cloud,
                                                                           float                                           clustering_tolerance,
                                                                           int                                             min_points,
                                                                           int                                             max_points,
@@ -556,28 +611,35 @@ void FilterReflectiveUavs::filterOutUavs( pcl::PointCloud<pcl::PointXYZI>::Ptr  
   if (debug_) {
     RCLCPP_INFO(node_->get_logger(),"Filter out uavs");
   }
+  const size_t original_point_count = pcl_cloud->points.size();
   std::vector<int> seed_indices;
+  seed_indices.reserve(tracks.size());
   pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
 
-  for (const auto & track : tracks) {
-    const Eigen::Vector3d neigh_pos(track.x[0], track.x[1], track.x[2]);
-    const auto transformed_point = transformPoint(neigh_pos, global_frame_, frame_id, timestamp);
+  if (!tracks.empty()) {
+    const auto transform = lookupTransform(frame_id, global_frame_, timestamp);
 
-    if (!transformed_point.has_value()) {
-      continue;
+    if (transform.has_value()) {
+      pcl_cloud->points.reserve(original_point_count + tracks.size());
+
+      for (const auto & track : tracks) {
+        const Eigen::Vector3d neigh_pos(track.x[0], track.x[1], track.x[2]);
+        const Eigen::Vector3d transformed_point = transformEigenPoint(neigh_pos, *transform);
+
+        pcl::PointXYZI p;
+        p.x = static_cast<float>(transformed_point.x());
+        p.y = static_cast<float>(transformed_point.y());
+        p.z = static_cast<float>(transformed_point.z());
+        p.intensity = static_cast<float>(max_intensity_);
+
+        const int current_index = static_cast<int>(pcl_cloud->points.size());
+        pcl_cloud->points.push_back(p);
+        seed_indices.push_back(current_index);
+      }
+
+      pcl_cloud->width = static_cast<uint32_t>(pcl_cloud->points.size());
+      pcl_cloud->height = 1;
     }
-
-    pcl::PointXYZI p;
-    p.x = static_cast<float>(transformed_point->x());
-    p.y = static_cast<float>(transformed_point->y());
-    p.z = static_cast<float>(transformed_point->z());
-    p.intensity = 255.0f;
-
-    const int current_index = static_cast<int>(pcl_cloud->points.size());
-    pcl_cloud->points.push_back(p);
-    pcl_cloud->width = static_cast<uint32_t>(pcl_cloud->points.size());
-    pcl_cloud->height = 1;
-    seed_indices.push_back(current_index);
   }
 
   if (pcl_cloud->points.empty()) {
@@ -589,60 +651,82 @@ void FilterReflectiveUavs::filterOutUavs( pcl::PointCloud<pcl::PointXYZI>::Ptr  
     return;
   }
 
-  kdtree.setInputCloud(pcl_cloud);
-  std::vector<bool> is_uav_point(pcl_cloud->points.size(), false);
+  std::vector<uint8_t> is_uav_point(pcl_cloud->points.size(), 0);
   const float max_sq_distance_from_seed = static_cast<float>(max_distance_from_seed_ * max_distance_from_seed_);
 
-  struct QueueElement {
-    int idx;
-    float sq_dist_from_seed;
-  };
+  if (!seed_indices.empty()) {
+    kdtree.setInputCloud(pcl_cloud);
 
-  for (const int idx_seed : seed_indices) {
-    std::queue<QueueElement> q;
-    q.push({idx_seed, 0.0f});
-    const auto seed = pcl_cloud->points[static_cast<size_t>(idx_seed)];
-    is_uav_point[static_cast<size_t>(idx_seed)] = true;
+    std::vector<int> queue;
+    std::vector<int> neighbors;
+    std::vector<float> sqr_distances_to_neighbor;
+    neighbors.reserve(64);
+    sqr_distances_to_neighbor.reserve(64);
 
-    while (!q.empty()) {
-      const auto current_element = q.front();
-      q.pop();
-      std::vector<int> neighbors;
-      std::vector<float> sqr_distances_to_neighbor;
-      (void)current_element.sq_dist_from_seed;
+    for (const int idx_seed : seed_indices) {
+      const size_t seed_index = static_cast<size_t>(idx_seed);
 
-      kdtree.radiusSearch(pcl_cloud->points[static_cast<size_t>(current_element.idx)], search_radius_, neighbors, sqr_distances_to_neighbor);
+      if (is_uav_point[seed_index]) {
+        continue;
+      }
 
-      for (size_t i = 0; i < neighbors.size(); ++i) {
-        const int neighbor_idx = neighbors[i];
-        const auto neighbor_point = pcl_cloud->points[static_cast<size_t>(neighbor_idx)];
-        const float dx = neighbor_point.x - seed.x;
-        const float dy = neighbor_point.y - seed.y;
-        const float dz = neighbor_point.z - seed.z;
-        const float sq_dist_to_seed = dx * dx + dy * dy + dz * dz;
+      queue.clear();
+      queue.push_back(idx_seed);
+      const auto seed = pcl_cloud->points[seed_index];
+      is_uav_point[seed_index] = 1;
 
-        if (sq_dist_to_seed > max_sq_distance_from_seed ||
-          is_uav_point[static_cast<size_t>(neighbor_idx)])
-        {
+      for (size_t queue_read_idx = 0; queue_read_idx < queue.size(); ++queue_read_idx) {
+        const int current_idx = queue[queue_read_idx];
+        neighbors.clear();
+        sqr_distances_to_neighbor.clear();
+
+        if (kdtree.radiusSearch(pcl_cloud->points[static_cast<size_t>(current_idx)], search_radius_, neighbors, sqr_distances_to_neighbor) <= 0) {
           continue;
         }
 
-        is_uav_point[static_cast<size_t>(neighbor_idx)] = true;
-        q.push({neighbor_idx, sq_dist_to_seed});
+        for (const int neighbor_idx : neighbors) {
+          const size_t neighbor_index = static_cast<size_t>(neighbor_idx);
+
+          if (is_uav_point[neighbor_index]) {
+            continue;
+          }
+
+          const auto & neighbor_point = pcl_cloud->points[neighbor_index];
+          const float dx = neighbor_point.x - seed.x;
+          const float dy = neighbor_point.y - seed.y;
+          const float dz = neighbor_point.z - seed.z;
+          const float sq_dist_to_seed = dx * dx + dy * dy + dz * dz;
+
+          if (sq_dist_to_seed > max_sq_distance_from_seed) {
+            continue;
+          }
+
+          is_uav_point[neighbor_index] = 1;
+          queue.push_back(neighbor_idx);
+        }
       }
     }
   }
 
   auto environment_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
   auto uav_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+  environment_cloud->points.reserve(original_point_count);
+  uav_cloud->points.reserve(original_point_count);
 
-  for (size_t i = 0; i < pcl_cloud->points.size(); ++i) {
+  for (size_t i = 0; i < original_point_count; ++i) {
     if (!is_uav_point[i]) {
       environment_cloud->points.push_back(pcl_cloud->points[i]);
     } else {
       uav_cloud->points.push_back(pcl_cloud->points[i]);
     }
   }
+
+  environment_cloud->width = static_cast<uint32_t>(environment_cloud->points.size());
+  environment_cloud->height = 1;
+  environment_cloud->is_dense = pcl_cloud->is_dense;
+  uav_cloud->width = static_cast<uint32_t>(uav_cloud->points.size());
+  uav_cloud->height = 1;
+  uav_cloud->is_dense = pcl_cloud->is_dense;
 
   PointCloudMsg output_msg;
   pcl::toROSMsg(*environment_cloud, output_msg);
@@ -666,7 +750,7 @@ void FilterReflectiveUavs::filterOutUavs( pcl::PointCloud<pcl::PointXYZI>::Ptr  
       p.x = static_cast<float>(uav_pos.second.x());
       p.y = static_cast<float>(uav_pos.second.y());
       p.z = static_cast<float>(uav_pos.second.z());
-      p.intensity = 255.0f;
+      p.intensity = static_cast<float>(max_intensity_);
       seed_cloud->points.push_back(p);
     }
   }
@@ -815,20 +899,18 @@ std::vector<FilterReflectiveUavs::StampPositionPair> FilterReflectiveUavs::loadG
   }
 
   gt_uav_centroids.reserve(uav_positions_.size());
-  size_t transform_failed_count = 0;
+  const auto transform = lookupTransform(frame_id, global_frame_, timestamp);
 
-  for (const auto & uav_pos : uav_positions_) {
-    const auto transformed_point = transformPoint(uav_pos.second, global_frame_, frame_id, timestamp);
-
-    if (!transformed_point.has_value()) {
-      ++transform_failed_count;
-      continue;
-    }
-
-    gt_uav_centroids.emplace_back(uav_pos.first, *transformed_point);
+  if (!transform.has_value()) {
+    RCLCPP_INFO_THROTTLE(node_->get_logger(), *clock_, 1000, "Loaded 0 GT UAV points for frame %s (1 TF failure, %zu cached positions)", frame_id.c_str(), uav_positions_.size());
+    return gt_uav_centroids;
   }
 
-  RCLCPP_INFO_THROTTLE(node_->get_logger(), *clock_, 1000, "Loaded %zu GT UAV points for frame %s (%zu TF failures, %zu cached positions)", gt_uav_centroids.size(), frame_id.c_str(), transform_failed_count, uav_positions_.size());
+  for (const auto & uav_pos : uav_positions_) {
+    gt_uav_centroids.emplace_back(uav_pos.first, transformEigenPoint(uav_pos.second, *transform));
+  }
+
+  RCLCPP_INFO_THROTTLE(node_->get_logger(), *clock_, 1000, "Loaded %zu GT UAV points for frame %s (0 TF failures, %zu cached positions)", gt_uav_centroids.size(), frame_id.c_str(), uav_positions_.size());
   return gt_uav_centroids;
 }
 
@@ -889,13 +971,7 @@ std::optional<Eigen::Vector3d> FilterReflectiveUavs::transformPoint(const Eigen:
     return std::nullopt;
   }
 
-  const auto & rotation = transform->transform.rotation;
-  const auto & translation = transform->transform.translation;
-
-  const Eigen::Quaterniond quat(rotation.w, rotation.x, rotation.y, rotation.z);
-  const Eigen::Vector3d translated(translation.x, translation.y, translation.z);
-
-  return quat * point + translated;
+  return transformEigenPoint(point, *transform);
 }
 
 }  // namespace filter_reflective_uavs

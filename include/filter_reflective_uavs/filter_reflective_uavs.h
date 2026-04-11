@@ -9,7 +9,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
 #include <shared_mutex>
 #include <string>
 #include <utility>
@@ -140,14 +139,14 @@ private:
                         const rclcpp::Time&        timestamp,
                         const std::vector<Track>&  tracks);
 
-  std::vector<StampPositionPair> clusterToCentroids(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud,
-                                                    const rclcpp::Time&                   timestamp,
-                                                    const std::string&                    frame_id) const;
-  void calculateCentroid(const pcl::PointCloud<pcl::PointXYZI>::Ptr  cloud,
-                          const std::vector<pcl::PointIndices>&        cluster_indices,
-                          std::vector<pcl::PointXYZ>&                  result) const;
-  std::vector<pcl::PointIndices> doEuclideanClustering(const pcl::search::KdTree<pcl::PointXYZI>::Ptr tree_orig,
-                                                       const pcl::PointCloud<pcl::PointXYZI>::Ptr     cloud,
+  std::vector<StampPositionPair> clusterToCentroids(pcl::PointCloud<pcl::PointXYZI>::ConstPtr cloud,
+                                                    const rclcpp::Time&                        timestamp,
+                                                    const std::string&                         frame_id) const;
+  void calculateCentroid(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr cloud,
+                         const std::vector<pcl::PointIndices>&           cluster_indices,
+                         std::vector<pcl::PointXYZ>&                     result) const;
+  std::vector<pcl::PointIndices> doEuclideanClustering(const pcl::search::KdTree<pcl::PointXYZI>::Ptr& tree_orig,
+                                                       const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& cloud,
                                                        float                                          clustering_tolerance,
                                                        int                                            min_points,
                                                        int                                            max_points,
@@ -173,7 +172,8 @@ private:
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Clock::SharedPtr clock_;
-  rclcpp::CallbackGroup::SharedPtr cbkgrp_subs_;
+  rclcpp::CallbackGroup::SharedPtr cbkgrp_lidar_;
+  rclcpp::CallbackGroup::SharedPtr cbkgrp_aux_;
 
   bool                                                                          is_initialized_{false};
   bool                                                                          debug_{false};
@@ -201,6 +201,7 @@ private:
   bool                                                                          filter_out_myself_enabled_{true};
   double                                                                        filter_out_myself_dist_{1.0};
   double                                                                        time_keep_{0.2};
+  int                                                                           subscriber_queue_size_{50};
 
   Eigen::Vector3d                                                               agent_pos_{Eigen::Vector3d::Zero()};
   std::vector<StampPositionPair>                                                centroid_positions_;
