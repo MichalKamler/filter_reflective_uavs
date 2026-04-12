@@ -31,7 +31,7 @@ void FilterReflectiveUavs::initialize()
 {
   node_ = this->this_node_ptr();
   clock_ = node_->get_clock();
-  cbkgrp_lidar_ = this_node().create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  cbkgrp_lidar_ = this_node().create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   cbkgrp_aux_ = this_node().create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   cbkgrp_timers_ = this_node().create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(clock_);
@@ -133,6 +133,7 @@ void FilterReflectiveUavs::loadParameters()
 }
 void FilterReflectiveUavs::callbackPointCloud2(const PointCloudMsgPtr msg)
 {
+  // const auto t_start_all = std::chrono::steady_clock::now();
   if (!is_initialized_) {
     return;
   }
@@ -150,6 +151,7 @@ void FilterReflectiveUavs::callbackPointCloud2(const PointCloudMsgPtr msg)
     addPointsToCloud(pcl_cloud, loadGtUavCentroids(frame_id, timestamp));
   }
 
+  // const auto t_start1 = std::chrono::steady_clock::now();
   pcl::PointCloud<pcl::PointXYZI> cloud_reflective;
   cloud_reflective.points.reserve(pcl_cloud->points.size() / 4);
 
@@ -179,23 +181,35 @@ void FilterReflectiveUavs::callbackPointCloud2(const PointCloudMsgPtr msg)
     collected_reflective_cloud_timestamp_ = timestamp;
   }
 
+  // const auto t_end1 = std::chrono::steady_clock::now();
+  // const double ms1 = std::chrono::duration<double, std::milli>(t_end1 - t_start1).count();
+  // RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000,"searching the intensity took:  %.2f ms", ms1);
+
+  // const auto t_start5 = std::chrono::steady_clock::now();
+
   std::vector<Eigen::Vector3d> estimates;
   {
     std::lock_guard<std::mutex> lock(estimates_mutex_);
     estimates = estimates_;
   }
 
-  if (!estimates.empty() && frame_id != global_frame_) {
-    const auto transform = lookupTransform(frame_id, global_frame_, timestamp);
-    if (transform.has_value()) {
-      for (auto & estimate : estimates) {
-        estimate = transformEigenPoint(estimate, *transform);
-      }
-    } else {
-      estimates.clear();
-      RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000, "Failed to transform UAV estimates to pointcloud frame");
-    }
-  }
+  // if (!estimates.empty() && frame_id != global_frame_) {
+  //   const auto transform = lookupTransform(frame_id, global_frame_, timestamp);
+  //   if (transform.has_value()) {
+  //     for (auto & estimate : estimates) {
+  //       estimate = transformEigenPoint(estimate, *transform);
+  //     }
+  //   } else {
+  //     estimates.clear();
+  //     RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000, "Failed to transform UAV estimates to pointcloud frame");
+  //   }
+  // }
+
+  // const auto t_end5 = std::chrono::steady_clock::now();
+  // const double ms5 = std::chrono::duration<double, std::milli>(t_end5 - t_start5).count();
+  // RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000,"getting estimates estimates:  %.2f ms", ms5);
+
+  // const auto t_start4 = std::chrono::steady_clock::now();
 
   if (estimates.empty() || search_radius_ <= 0.0) {
     PointCloudMsg output_msg;
@@ -218,10 +232,23 @@ void FilterReflectiveUavs::callbackPointCloud2(const PointCloudMsgPtr msg)
     return;
   }
 
+  // const auto t_end4 = std::chrono::steady_clock::now();
+  // const double ms4 = std::chrono::duration<double, std::milli>(t_end4 - t_start4).count();
+  // RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000,"return if estim ampyt and invalid search radius:  %.2f ms", ms4);
+
   pcl::PointCloud<pcl::PointXYZI> filtered_pcl;
   pcl::PointCloud<pcl::PointXYZI> removed_plc;
 
+
+  // const auto t_start2 = std::chrono::steady_clock::now();
+
   splitCloudBySpheres(pcl_cloud, estimates, static_cast<float>(search_radius_), filtered_pcl, removed_plc);
+
+  // const auto t_end2 = std::chrono::steady_clock::now();
+  // const double ms2 = std::chrono::duration<double, std::milli>(t_end2 - t_start2).count();
+  // RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000,"split spheres took:  %.2f ms", ms2);
+
+  // const auto t_start3 = std::chrono::steady_clock::now();
 
   PointCloudMsg output_msg;
   pcl::toROSMsg(filtered_pcl, output_msg);
@@ -234,6 +261,14 @@ void FilterReflectiveUavs::callbackPointCloud2(const PointCloudMsgPtr msg)
   output_msg_removed_points.header.frame_id = frame_id;
   output_msg_removed_points.header.stamp = timestamp;
   pub_pointcloud_removed_.publish(output_msg_removed_points);
+
+  // const auto t_end3 = std::chrono::steady_clock::now();
+  // const double ms3 = std::chrono::duration<double, std::milli>(t_end3 - t_start3).count();
+  // RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000,"clouds to outputmsg took %.2f ms", ms3);
+
+  // const auto t_end = std::chrono::steady_clock::now();
+  // const double ms = std::chrono::duration<double, std::milli>(t_end - t_start_all).count();
+  // RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000,"callbackPointCloud2 took %.2f ms", ms);
 }
 
 void FilterReflectiveUavs::cbTmEstimate()
@@ -270,17 +305,31 @@ void FilterReflectiveUavs::cbTmEstimate()
   publishEstimates(global_frame_, timestamp, tracks_);
   publishVelAsArrow(global_frame_, timestamp, tracks_);
 
-  {
+  std::vector<Eigen::Vector3d> estimates;
+  estimates.reserve(tracks_.size() + (filter_out_myself_enabled_ ? 1U : 0U));
+
+  for (const auto & track : tracks_) {
+    estimates.emplace_back(track.x[0], track.x[1], track.x[2]);
+  }
+
+  if (filter_out_myself_enabled_) {
     std::lock_guard<std::mutex> lock(estimates_mutex_);
-    estimates_.clear();
-    estimates_.reserve(tracks_.size() + (filter_out_myself_enabled_ ? 1U : 0U));
-    for (const auto & track : tracks_) {
-      estimates_.emplace_back(track.x[0], track.x[1], track.x[2]);
-    }
-    if (filter_out_myself_enabled_) {
-      estimates_.push_back(agent_pos_);
+    estimates.push_back(agent_pos_);
+  }
+
+  if (!estimates.empty() && frame_id != global_frame_) {
+    const auto transform = lookupTransform(frame_id, global_frame_, timestamp);
+    if (transform.has_value()) {
+      for (auto & estimate : estimates) {
+        estimate = transformEigenPoint(estimate, *transform);
+      }
+    } else {
+      estimates.clear();
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *clock_, 1000, "Failed to transform UAV estimates to pointcloud frame");
     }
   }
+  std::lock_guard<std::mutex> lock(estimates_mutex_);
+  estimates_ = std::move(estimates);
 
   // last_update_ = now;
   // }
@@ -321,41 +370,24 @@ void FilterReflectiveUavs::splitCloudBySpheres( const pcl::PointCloud<pcl::Point
     return;
   }
 
-  pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
-  kdtree.setInputCloud(input_cloud);
+  const float radius_sq = radius * radius;
 
-  std::vector<std::uint8_t> removed_mask(n, 0);
-  std::vector<int> indices;
-  std::vector<float> sq_dists;
-  std::size_t removed_count = 0;
-
-  for (const auto& c : centers) {
-    pcl::PointXYZI query;
-    query.x = static_cast<float>(c.x());
-    query.y = static_cast<float>(c.y());
-    query.z = static_cast<float>(c.z());
-    query.intensity = 0.0f;
-
-    indices.clear();
-    sq_dists.clear();
-
-    if (kdtree.radiusSearch(query, radius, indices, sq_dists) > 0) {
-      for (int idx : indices) {
-        const std::size_t point_index = static_cast<std::size_t>(idx);
-        if (!removed_mask[point_index]) {
-          removed_mask[point_index] = 1;
-          ++removed_count;
-        }
-      }
-    }
-  }
-
-  kept_cloud.points.reserve(n - removed_count);
-  removed_cloud.points.reserve(removed_count);
-
+  kept_cloud.points.reserve(n);
+  removed_cloud.points.reserve(n / 8);
   for (std::size_t i = 0; i < n; ++i) {
     const auto& p = input_cloud->points[i];
-    if (removed_mask[i]) {
+    bool remove_point = false;
+    for (const auto & center : centers) {
+      const float dx = p.x - static_cast<float>(center.x());
+      const float dy = p.y - static_cast<float>(center.y());
+      const float dz = p.z - static_cast<float>(center.z());
+      if (dx * dx + dy * dy + dz * dz <= radius_sq) {
+        remove_point = true;
+        break;
+      }
+    }
+
+    if (remove_point) {
       removed_cloud.points.push_back(p);
     } else {
       kept_cloud.points.push_back(p);
