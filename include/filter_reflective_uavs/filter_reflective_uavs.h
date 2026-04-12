@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -100,6 +101,9 @@ private:
   using StampPositionPair = std::pair<rclcpp::Time, Eigen::Vector3d>;
 
   void loadParameters();
+  void callbackPointCloud2(const PointCloudMsgPtr msg);
+  void cbTmEstimate();
+  void timerPointCloudCallback();
   void callbackPointCloud(const PointCloudMsgPtr msg);
   void pointCloud2PosCallback(const PointCloudMsgPtr msg);
   void odomCallback(const OdomMsgPtr msg);
@@ -156,6 +160,11 @@ private:
                      const std::string&                    frame_id,
                      const rclcpp::Time&                   timestamp,
                      const std::vector<Track>&             tracks);
+  void splitCloudBySpheres(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& input_cloud,
+                           const std::vector<Eigen::Vector3d>&              centers,
+                           float                                            radius,
+                           pcl::PointCloud<pcl::PointXYZI>&                 kept_cloud,
+                           pcl::PointCloud<pcl::PointXYZI>&                 removed_cloud);
 
   geometry_msgs::msg::Pose poseToMsg(const Eigen::Vector3d& position,
                                      const Eigen::Vector3d& velocity) const;
@@ -174,6 +183,7 @@ private:
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::CallbackGroup::SharedPtr cbkgrp_lidar_;
   rclcpp::CallbackGroup::SharedPtr cbkgrp_aux_;
+  rclcpp::CallbackGroup::SharedPtr cbkgrp_timers_;
 
   bool                                                                          is_initialized_{false};
   bool                                                                          debug_{false};
@@ -185,6 +195,8 @@ private:
   double                                                                        min_intensity_{250.0};
   double                                                                        max_intensity_{255.0};
   std::vector<Track>                                                            tracks_;
+  std::vector<Eigen::Vector3d>                                                  estimates_;
+  std::mutex                                                                    estimates_mutex_;
   double                                                                        dt_{0.2};
   double                                                                        max_no_update_{1.0};
   double                                                                        gate_treshold_{2.0};
@@ -208,6 +220,10 @@ private:
   std::vector<StampPositionPair>                                                collected_centroid_positions_;
   std::vector<StampPositionPair>                                                uav_positions_;
   std::vector<StampPositionPair>                                                detected_centroid_positions_;
+  pcl::PointCloud<pcl::PointXYZI>::Ptr                                          collected_reflective_cloud_{std::make_shared<pcl::PointCloud<pcl::PointXYZI>>()};
+  std::string                                                                   collected_reflective_cloud_frame_id_;
+  rclcpp::Time                                                                  collected_reflective_cloud_timestamp_{0, 0, RCL_ROS_TIME};
+  std::mutex                                                                    collected_reflective_cloud_mutex_;
 
   mutable std::shared_mutex                                                     uav_positions_mutex_;
   mutable std::shared_mutex                                                     detected_centroid_positions_mutex_;
@@ -215,6 +231,8 @@ private:
   mrs_lib::SubscriberHandler<PointCloudMsg>                                     sh_pointcloud_;
   mrs_lib::SubscriberHandler<PointCloudMsg>                                     sh_pointcloud_pos_;
   mrs_lib::SubscriberHandler<OdomMsg>                                           sh_odom_;
+  rclcpp::TimerBase::SharedPtr                                                  timer_pointcloud_;
+  PointCloudMsgPtr                                                              latest_pointcloud_msg_;
 
   mrs_lib::PublisherHandler<PointCloudMsg>                                      publisher_pointcloud_reflective_centroids_;
   mrs_lib::PublisherHandler<PoseArrayMsg>                                       publisher_estimates_;
