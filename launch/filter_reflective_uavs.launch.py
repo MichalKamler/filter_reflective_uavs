@@ -28,6 +28,22 @@ def generate_launch_description():
                 "custom_config": "",
                 "uav_name": uav_name,
                 "global_frame": global_frame,
+                "qos_overrides": {
+                    "/filter_reflective_uavs/filtered_pcl": {
+                        "publisher": {
+                            "reliability": "best_effort",
+                            "history": "keep_last",
+                            "depth": 1
+                        }
+                    },
+                    "/filter_reflective_uavs/pose_vel": {
+                        "publisher": {
+                            "reliability": "best_effort",
+                            "history": "keep_last",
+                            "depth": 5
+                        }
+                    }
+                }
             },
         ],
         remappings=[
